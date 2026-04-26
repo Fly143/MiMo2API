@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiMo2API</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --success: #10b981;
+            --success-hover: #059669;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #475569;
+            --shadow: rgba(0, 0, 0, 0.3);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--bg) 0%, #1a1a2e 100%);
+            min-height: 100vh; color: var(--text); line-height: 1.6;
+        }
+        .container { max-width: 720px; margin: 0 auto; padding: 40px 20px; }
+        .header { text-align: center; margin-bottom: 40px; }
+        .header h1 {
+            font-size: 2.2rem; font-weight: 700;
+            background: linear-gradient(135deg, #6366f1, #a855f7, #ec4899);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; margin-bottom: 8px;
+        }
+        .header p { color: var(--text-muted); font-size: 1rem; }
+        .card {
+            background: var(--bg-card); border-radius: 16px; padding: 24px;
+            margin-bottom: 24px; box-shadow: 0 4px 24px var(--shadow);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .card h2 {
+            font-size: 1.25rem; font-weight: 600; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .card h2::before {
+            content: ''; width: 4px; height: 20px;
+            background: linear-gradient(180deg, var(--primary), #a855f7);
+            border-radius: 2px;
+        }
+        input, textarea {
+            width: 100%; padding: 12px 16px;
+            background: var(--bg-input); border: 1px solid var(--border);
+            border-radius: 10px; color: var(--text); font-size: 14px;
+            transition: border-color 0.2s; outline: none;
+        }
+        input:focus, textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.2);
+        }
+        input::placeholder, textarea::placeholder { color: var(--text-muted); }
+        textarea {
+            height: 140px; font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px; resize: vertical;
+        }
+        button {
+            padding: 10px 20px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: all 0.2s; display: inline-flex;
+            align-items: center; gap: 6px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), #8b5cf6);
+            color: white;
+        }
+        .btn-primary:hover { background: linear-gradient(135deg, var(--primary-hover), #7c3aed); }
+        .btn-success { background: linear-gradient(135deg, var(--success), #34d399); color: white; }
+        .btn-success:hover { background: linear-gradient(135deg, var(--success-hover), #10b981); }
+        .btn-danger { background: var(--danger); color: white; padding: 6px 12px; font-size: 12px; }
+        .btn-danger:hover { background: var(--danger-hover); }
+        .btn-outline {
+            background: transparent; border: 1px solid var(--border);
+            color: var(--text); padding: 8px 16px; font-size: 13px;
+        }
+        .btn-outline:hover { background: var(--bg-input); border-color: var(--primary); }
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+        .field { margin-bottom: 12px; }
+        .field label {
+            display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex; gap: 0; margin-bottom: 0;
+            border-radius: 10px 10px 0 0; overflow: hidden;
+            border: 1px solid var(--border); border-bottom: none;
+        }
+        .tab {
+            flex: 1; padding: 10px 4px; text-align: center; font-size: 13px;
+            cursor: pointer; background: var(--bg); color: var(--text-muted);
+            transition: all 0.2s; border: none;
+        }
+        .tab.active { background: var(--primary); color: #fff; }
+        .tab:first-child { border-radius: 10px 0 0 0; }
+        .tab:last-child { border-radius: 0 10px 0 0; }
+        .tab-content { border: 1px solid var(--border); border-top: none; border-radius: 0 0 10px 10px; padding: 20px; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* Status messages */
+        .status {
+            padding: 10px 14px; border-radius: 8px; margin: 12px 0; font-size: 13px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .status.ok { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+        .status.err { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+        .status.info { background: rgba(99,102,241,0.15); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.3); }
+        .status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .dot-ok { background: #22c55e; }
+        .dot-err { background: #ef4444; }
+        .dot-idle { background: #64748b; }
+
+        /* Account list */
+        .account {
+            background: var(--bg-input); padding: 14px 16px; border-radius: 10px;
+            margin-bottom: 8px; border: 1px solid var(--border);
+        }
+        .account .info-line { font-size: 12px; color: var(--text-muted); margin-bottom: 3px; }
+        .account .info-line b { color: var(--text); }
+        .account code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: 11px; color: #7dd3fc; word-break: break-all; }
+        .account .actions { display: flex; gap: 8px; margin-top: 10px; }
+        .account .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .empty { text-align: center; color: var(--text-muted); padding: 24px; font-size: 14px; }
+
+        /* Toast */
+        .toast {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+            padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 999;
+            display: none; white-space: nowrap;
+        }
+        .toast.show { display: block; }
+        .toast-ok { background: #064e3b; color: #6ee7b7; }
+        .toast-err { background: #7f1d1d; color: #fca5a5; }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .container { padding: 20px 16px; }
+            .header h1 { font-size: 1.8rem; }
+            .card { padding: 20px; }
+            .btn-group { flex-direction: column; }
+            .btn-group button { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>MiMo2API</h1>
+            <p>小米 MiMo 模型 OpenAI 兼容 API</p>
+        </div>
+
+        <!-- API Keys 管理 -->
+        <div class="card">
+            <h2>API Keys</h2>
+            <div class="field">
+                <label>多个 Key 用逗号分隔</label>
+                <input type="text" id="apiKeys" placeholder="sk-key1, sk-key2, sk-key3">
+            </div>
+            <button class="btn-primary" onclick="saveKeys()">保存配置</button>
+            <div id="keysResult"></div>
+        </div>
+
+        <!-- 标签页：cURL / Cookie / 账号 -->
+        <div class="card" style="padding: 0; overflow: hidden;">
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('curl')">cURL</div>
+                <div class="tab" onclick="switchTab('cookie')">Cookie</div>
+                <div class="tab" onclick="switchTab('accounts')">账号</div>
+            </div>
+
+            <div class="tab-content">
+                <!-- cURL 导入 -->
+                <div id="panel-curl" class="tab-panel active">
+                    <details style="margin-bottom:12px">
+                        <summary style="cursor:pointer;color:var(--primary);font-size:13px;padding:6px 0">如何获取 cURL?</summary>
+                        <ol style="margin:10px 0;padding-left:20px;color:var(--text-muted);font-size:13px;line-height:1.8">
+                            <li>登录 <a href="https://aistudio.xiaomimimo.com" target="_blank" style="color:var(--primary)">aistudio.xiaomimimo.com</a></li>
+                            <li>按 F12 → Network 标签（手机需电脑模式）</li>
+                            <li>发一条消息，找到 <code style="background:var(--bg-input);padding:1px 5px;border-radius:3px;font-size:12px">chat</code> 请求</li>
+                            <li>右键 → Copy as cURL，粘贴到下方</li>
+                        </ol>
+                    </details>
+                    <textarea id="curl" placeholder="curl 'https://aistudio.xiaomimimo.com/open-apis/bot/chat...'"></textarea>
+                    <button class="btn-primary" style="margin-top:4px;width:100%" onclick="parseCurl()">解析 cURL</button>
+                    <div id="curlResult"></div>
+                </div>
+
+                <!-- Cookie 手动输入 -->
+                <div id="panel-cookie" class="tab-panel">
+                    <div class="status info">从浏览器 Cookie 中获取以下三个值：<br>F12 → Application → Cookies → aistudio.xiaomimimo.com</div>
+                    <div class="field"><label>serviceToken</label><input type="text" id="c-st" placeholder="粘贴 serviceToken"></div>
+                    <div class="field"><label>userId</label><input type="text" id="c-uid" placeholder="粘贴 userId"></div>
+                    <div class="field"><label>xiaomichatbot_ph</label><input type="text" id="c-ph" placeholder="粘贴 xiaomichatbot_ph"></div>
+                    <button class="btn-primary" style="width:100%" onclick="saveCookie()">保存账号</button>
+                </div>
+
+                <!-- 账号管理 -->
+                <div id="panel-accounts" class="tab-panel">
+                    <div id="accounts"></div>
+                    <div class="btn-group">
+                        <button class="btn-outline" onclick="loadAccounts()">刷新</button>
+                        <button class="btn-success" onclick="testAll()">测试全部</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        let cfg = { api_keys: '', mimo_accounts: [] }, parsed = null;
+
+        // === 工具函数 ===
+        function $id(id) { return document.getElementById(id); }
+        function toast(msg, err) {
+            const t = $id('toast');
+            t.textContent = msg; t.className = 'toast show ' + (err ? 'toast-err' : 'toast-ok');
+            clearTimeout(t._t); t._t = setTimeout(() => t.className = 'toast', 2500);
+        }
+        function showStatus(id, type, msg) {
+            $id(id).innerHTML = `<div class="status ${type}">${msg}</div>`;
+        }
+        function switchTab(t) {
+            document.querySelectorAll('.tab').forEach((el, i) => {
+                el.className = 'tab' + (['curl','cookie','accounts'][i] === t ? ' active' : '');
+            });
+            document.querySelectorAll('.tab-panel').forEach(p => p.className = 'tab-panel');
+            $id('panel-' + t).className = 'tab-panel active';
+            if (t === 'accounts') loadAccounts();
+        }
+
+        // === 加载配置（仅 API Keys） ===
+        async function loadConfig() {
+            try {
+                const r = await fetch('/api/config');
+                cfg = await r.json();
+                $id('apiKeys').value = cfg.api_keys || '';
+            } catch (e) {}
+        }
+
+        // === API Keys ===
+        async function saveKeys() {
+            cfg.api_keys = $id('apiKeys').value;
+            try {
+                await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+                showStatus('keysResult', 'ok', '配置已保存');
+                setTimeout(() => $id('keysResult').innerHTML = '', 2000);
+            } catch (e) {
+                showStatus('keysResult', 'err', '保存失败');
+            }
+        }
+
+        // === cURL 解析 → 测试 → 保存（三步流程） ===
+        async function parseCurl() {
+            const curl = $id('curl').value.trim();
+            if (!curl) { toast('请粘贴 cURL 命令', true); return; }
+            showStatus('curlResult', 'info', '解析中...');
+            try {
+                const r = await fetch('/api/parse-curl', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ curl })
+                });
+                if (!r.ok) { showStatus('curlResult', 'err', '解析失败，请检查 cURL 格式'); return; }
+                parsed = await r.json();
+                $id('curlResult').innerHTML = `
+                    <div class="status ok">解析成功 — ID: ${parsed.user_id}</div>
+                    <div class="btn-group">
+                        <button class="btn-outline" onclick="testParsed()">测试连接</button>
+                        <button class="btn-success" onclick="saveParsed()">添加账号</button>
+                    </div>
+                    <div id="testResult"></div>
+                `;
+            } catch (e) { showStatus('curlResult', 'err', '请求失败: ' + e.message); }
+        }
+
+        async function testParsed() {
+            if (!parsed) return;
+            showStatus('testResult', 'info', '测试中...');
+            try {
+                const r = await fetch('/api/test-account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(parsed)
+                });
+                const d = await r.json();
+                if (d.success) showStatus('testResult', 'ok', '连接成功: ' + d.response.slice(0, 60));
+                else showStatus('testResult', 'err', '连接失败: ' + d.error);
+            } catch (e) { showStatus('testResult', 'err', '请求失败'); }
+        }
+
+        async function saveParsed() {
+            if (!parsed) return;
+            cfg.mimo_accounts = cfg.mimo_accounts || [];
+            cfg.mimo_accounts.push(parsed);
+            try {
+                await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+                parsed = null;
+                $id('curl').value = '';
+                $id('curlResult').innerHTML = '';
+                toast('账号已添加');
+                loadConfig();
+            } catch (e) { toast('保存失败', true); }
+        }
+
+        // === Cookie 手动保存 ===
+        async function saveCookie() {
+            const st = $id('c-st').value.trim();
+            const uid = $id('c-uid').value.trim();
+            const ph = $id('c-ph').value.trim();
+            if (!st || !uid || !ph) { toast('请填写所有字段', true); return; }
+            try {
+                const r = await fetch('/api/account/import-cookie', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serviceToken: st, userId: uid, xiaomichatbot_ph: ph })
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    toast('已保存');
+                    $id('c-st').value = ''; $id('c-uid').value = ''; $id('c-ph').value = '';
+                    loadConfig();
+                } else {
+                    toast(d.error || '保存失败', true);
+                }
+            } catch (e) { toast('请求失败', true); }
+        }
+
+        // === 账号管理 ===
+        async function loadAccounts() {
+            try {
+                const r = await fetch('/api/accounts');
+                const d = await r.json();
+                const el = $id('accounts');
+                if (!d.accounts || !d.accounts.length) {
+                    el.innerHTML = '<div class="empty">暂无配置账号</div>';
+                    return;
+                }
+                el.innerHTML = d.accounts.map((a, i) => `
+                    <div class="account">
+                        <div class="info-line">
+                            <span class="status-dot" style="background:${a.is_valid ? '#22c55e' : '#64748b'}"></span>
+                            <b>userId:</b> <code>${a.user_id}</code>
+                            ${a.is_valid ? '<span style="color:#22c55e;margin-left:8px;font-size:12px">✅ 有效</span>' : '<span style="color:#94a3b8;margin-left:8px;font-size:12px">⚪ 未验证</span>'}
+                            ${a.last_test ? '<span style="color:var(--text-muted);margin-left:4px;font-size:11px">· ' + a.last_test + '</span>' : ''}
+                        </div>
+                        <div class="info-line"><b>token:</b> <code>${a.token_masked}</code></div>
+                        <div class="actions">
+                            <button class="btn-outline" onclick="testAcct(${i})">测试</button>
+                            <button class="btn-danger" onclick="delAcct(${i})">删除</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                $id('accounts').innerHTML = '<div class="empty">加载失败</div>';
+            }
+        }
+
+        async function testAcct(i) {
+            try {
+                const r = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
+                const d = await r.json();
+                toast(d.ok ? '✅ 有效: ' + (d.response || '').substring(0, 40) : '❌ ' + d.error, !d.ok);
+                loadAccounts();
+            } catch (e) { toast('测试失败', true); }
+        }
+
+        async function testAll() {
+            try {
+                const r = await fetch('/api/accounts');
+                const d = await r.json();
+                if (!d.accounts || !d.accounts.length) { toast('无账号可测试', true); return; }
+                toast('测试中...');
+                let ok = 0;
+                for (let i = 0; i < d.accounts.length; i++) {
+                    try {
+                        const r2 = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
+                        const d2 = await r2.json();
+                        if (d2.ok) ok++;
+                    } catch (e) {}
+                }
+                toast(ok + '/' + d.accounts.length + ' 有效');
+                loadAccounts();
+            } catch (e) { toast('请求失败', true); }
+        }
+
+        async function delAcct(i) {
+            if (!confirm('确定删除此账号？')) return;
+            try {
+                await fetch('/api/accounts/' + i, { method: 'DELETE' });
+                toast('已删除');
+                loadAccounts();
+                loadConfig();
+            } catch (e) { toast('删除失败', true); }
+        }
+
+        // === 初始化 ===
+        loadConfig();
+    </script>
+</body>
+</html>
+
