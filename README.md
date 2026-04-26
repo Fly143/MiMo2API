@@ -188,7 +188,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### 4. 多模态（图片理解）
 
-需要选择 **omni** 模型。支持两种图片格式：
+需要选择 **omni/v2.5** 模型。支持两种图片格式：
 
 **URL 方式：**
 ```bash
