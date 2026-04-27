@@ -119,7 +119,8 @@ class ConfigManager:
         """更新配置"""
         with self.lock:
             accounts = [
-                MimoAccount(**acc) for acc in new_config.get('mimo_accounts', [])
+                MimoAccount(**{k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__})
+                for acc in new_config.get('mimo_accounts', [])
             ]
             self.config = Config(
                 api_keys=new_config.get('api_keys', 'sk-default'),
