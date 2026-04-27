@@ -524,7 +524,7 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
 # ====== 管理页面 ======
 
 from pathlib import Path as _Path
-_ADMIN_HTML = (_Path(__file__).parent / "admin.html").read_text(encoding="utf-8")
+_ADMIN_HTML = (_Path(__file__).parent.parent / "web" / "index.html").read_text(encoding="utf-8")
 
 @router.get("/admin")
 @router.get("/")
