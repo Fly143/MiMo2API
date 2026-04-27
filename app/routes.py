@@ -135,6 +135,21 @@ THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
 
+def _safe_flush(text: str) -> Tuple[str, str]:
+    """Split text into (safe_to_send, keep_in_buffer).
+
+    仅保留可能是 <think> 或 </think> 部分标签的最长后缀。
+    其余全部立即刷新，避免 RikkaHub 等客户端因 silence gap 进入缓冲模式。
+    """
+    last_lt = text.rfind('<')
+    if last_lt == -1:
+        return text, ""
+    suffix = text[last_lt:]
+    if THINK_OPEN.startswith(suffix) or THINK_CLOSE.startswith(suffix):
+        return text[:last_lt], suffix
+    return text, ""
+
+
 def _build_response(msg_id: str, model: str, content: str = None, tool_calls: list = None,
                     finish_reason: str = "stop", usage: dict = None) -> OpenAIResponse:
     """统一构建 OpenAI 非流式响应"""
@@ -161,8 +176,14 @@ def _build_response(msg_id: str, model: str, content: str = None, tool_calls: li
 
 
 def _build_chunk(msg_id: str, model: str, content: str = None, reasoning: str = None,
-                  tool_calls: list = None, finish_reason: str = None, role: str = None) -> str:
-    """统一构建 SSE chunk 字符串"""
+                  tool_calls: list = None, finish_reason: str = None, role: str = None,
+                  created: int = None) -> str:
+    """统一构建 SSE chunk 字符串
+
+    exclude_none=True 去除 null 字段，避免客户端的 SSE 解析器
+    （尤其是 RikkaHub）因 message:null 等非标准字段误判为非流式模式。
+    同时输出 reasoning 和 reasoning_content（DeepSeek/RikkaHub 兼容）。
+    """
     delta = OpenAIDelta(
         role=role,
         content=content,
@@ -172,11 +193,18 @@ def _build_chunk(msg_id: str, model: str, content: str = None, reasoning: str = 
     chunk = OpenAIResponse(
         id=msg_id,
         object="chat.completion.chunk",
-        created=int(time.time()),
+        created=created if created is not None else int(time.time()),
         model=model,
         choices=[OpenAIChoice(index=0, delta=delta, finish_reason=finish_reason)]
     )
-    return f"data: {json.dumps(chunk.dict())}\n\n"
+    data = chunk.model_dump(exclude_none=True)
+    # DeepSeek/RikkaHub 兼容：同时输出 reasoning 和 reasoning_content
+    if reasoning:
+        for choice in data.get('choices', []):
+            d = choice.get('delta', {})
+            if 'reasoning' in d:
+                d['reasoning_content'] = reasoning
+    return f"data: {json.dumps(data)}\n\n"
 
 
 def _split_think(text: str) -> Tuple[str, str]:
@@ -215,8 +243,19 @@ async def chat_completions(
             {k: (v[:200] if isinstance(v, str) else v) for k, v in m.items()}
             for m in [msg.dict() for msg in request.messages]
         ]
-        print(f"[REQ] model={request.model} stream={request.stream} tools={len(request.tools) if request.tools else 0} tool_choice={request.tool_choice}")
+        print(f"[REQ] model={request.model} stream={request.stream} tools={len(request.tools) if request.tools else 0} tool_choice={request.tool_choice} reasoning_effort={request.reasoning_effort}")
         print(f"[REQ] messages={json.dumps(req_dump['messages'], ensure_ascii=False)[:500]}")
+        # 完整请求日志到文件，便于排查 RikkaHub 兼容性
+        try:
+            from pathlib import Path as _P2
+            logf = _P2.home() / 'mimo_requests.log'
+            with open(str(logf), 'a') as _rf:
+                import datetime as _dt2
+                full = request.model_dump(exclude_none=True)
+                full['_timestamp'] = _dt2.datetime.now().isoformat()
+                _rf.write(json.dumps(full, ensure_ascii=False) + '\n')
+        except Exception as _e2:
+            pass
     except Exception:
         pass
 
@@ -259,7 +298,12 @@ async def chat_completions(
     if request.stream:
         return StreamingResponse(
             _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            }
         )
 
     # 非流式响应
@@ -276,10 +320,10 @@ async def chat_completions(
             tool_call, cleaned = None, content
 
         if tool_call:
-            # 返回工具调用 + 清理后的自然语言（不含 TOOL_CALL 标签）
+            # 返回工具调用（content 设为 None，避免泄露 TOOL_CALL 文本）
             return _build_response(
                 msg_id, request.model,
-                content=cleaned if cleaned else None,
+                content=None,
                 tool_calls=[tool_call],
                 finish_reason="tool_calls",
                 usage=usage
@@ -312,103 +356,149 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
     无工具定义时：实时流式输出
     """
     msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created_t = int(time.time())
 
     # 发送初始 role delta
-    yield _build_chunk(msg_id, model, role="assistant")
+    yield _build_chunk(msg_id, model, created=created_t, role="assistant")
 
     has_tools = tools is not None
 
     try:
         if has_tools:
-            # 有工具时：缓冲全部内容，最后判断
+            # 有工具时：流式输出 reasoning，缓冲正文（可能含 TOOL_CALL 文本）
             full_content = ""
+            in_think = False
+            buffer = ""
+            content_buffer = ""  # 正文缓冲，避免泄露 TOOL_CALL
+            
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
                 chunk = sse_data.get("content", "")
-                if chunk:
-                    full_content += chunk
-
+                if not chunk:
+                    continue
+                
+                full_content += chunk
+                buffer += chunk.replace("\x00", "")
+                
+                # 流式处理 think 标签（仅 reasoning 流式，正文缓冲）
+                while True:
+                    if not in_think:
+                        idx = buffer.find(THINK_OPEN)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                content_buffer += safe  # 缓冲，不流式
+                            in_think = True
+                            buffer = buffer[idx + len(THINK_OPEN):]
+                            continue
+                        
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            content_buffer += safe  # 缓冲
+                        buffer = keep
+                        break
+                    else:
+                        idx = buffer.find(THINK_CLOSE)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                            in_think = False
+                            buffer = buffer[idx + len(THINK_CLOSE):]
+                            continue
+                        
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                        buffer = keep
+                        break
+            
+            # 正文留在 buffer + content_buffer 中
+            if buffer and not in_think:
+                content_buffer += buffer
+            
             # 清理 null 字节
             full_content = full_content.replace("\x00", "")
-
-            # 先分离 think 块，再提取工具调用
+            
+            # 分离 think 块，提取工具调用
             main_text, think_text = _split_think(full_content)
             tool_names = get_tool_names(tools)
             tool_call, cleaned_main = extract_tool_call(main_text, tool_names)
-
-            # 发送 think 内容
-            if think_text:
-                yield _build_chunk(msg_id, model, reasoning=think_text)
-
+            
             if tool_call:
-                # Send cleaned natural language content first, then tool calls
-                if cleaned_main:
-                    yield _build_chunk(msg_id, model, content=cleaned_main)
+                # 有工具调用：只发 tool_calls
                 streaming_tc = {**tool_call, "index": 0}
-                yield _build_chunk(msg_id, model, tool_calls=[streaming_tc], finish_reason="tool_calls")
+                yield _build_chunk(msg_id, model, created=created_t, tool_calls=[streaming_tc], finish_reason="tool_calls")
             else:
-                # 无工具调用：发送正文
-                if main_text:
-                    yield _build_chunk(msg_id, model, content=main_text)
-                yield _build_chunk(msg_id, model, finish_reason="stop")
-
+                # 无工具调用：补发缓冲的正文
+                if content_buffer:
+                    yield _build_chunk(msg_id, model, created=created_t, content=content_buffer)
+                yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            
             yield "data: [DONE]\n\n"
 
         else:
             # 无工具时：实时流式输出
+            # 使用 _safe_flush 仅保留可能是部分标签的后缀，其余立即刷新
             buffer = ""
             in_think = False
+            chunk_count = 0
 
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
                 chunk = sse_data.get("content", "")
                 if not chunk:
                     continue
 
-                buffer += chunk
-                text = buffer.replace("\x00", "")
+                chunk_count += 1
+                buffer += chunk.replace("\x00", "")
 
                 # 处理 think 标签
                 while True:
                     if not in_think:
-                        idx = text.find(THINK_OPEN)
+                        idx = buffer.find(THINK_OPEN)
                         if idx != -1:
-                            if idx > 0:
-                                yield _build_chunk(msg_id, model, content=text[:idx])
+                            # 发现 <think>：先刷 think 前的内容，再切到 think 模式
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, content=safe)
                             in_think = True
-                            text = text[idx + len(THINK_OPEN):]
+                            buffer = buffer[idx + len(THINK_OPEN):]
+                            print(f"[STREAM] #{chunk_count} ENTER think mode, buffer_after={repr(buffer[:30])}")
                             continue
 
-                        # 安全截断：保留可能的不完整标签
-                        safe = len(text) - len(THINK_OPEN)
-                        if safe > 0:
-                            yield _build_chunk(msg_id, model, content=text[:safe])
-                            text = text[safe:]
+                        # 无 <think>：仅保留可能是部分标签的后缀
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            yield _build_chunk(msg_id, model, created=created_t, content=safe)
+                        buffer = keep
                         break
 
                     else:
-                        idx = text.find(THINK_CLOSE)
+                        idx = buffer.find(THINK_CLOSE)
                         if idx != -1:
-                            if idx > 0:
-                                yield _build_chunk(msg_id, model, reasoning=text[:idx])
+                            # 发现 </think>：先刷 reasoning，再切回内容模式
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
                             in_think = False
-                            text = text[idx + len(THINK_CLOSE):]
+                            buffer = buffer[idx + len(THINK_CLOSE):]
+                            print(f"[STREAM] #{chunk_count} EXIT think mode, content_start={repr(buffer[:30])}")
                             continue
 
-                        safe = len(text) - len(THINK_CLOSE)
-                        if safe > 0:
-                            yield _build_chunk(msg_id, model, reasoning=text[:safe])
-                            text = text[safe:]
+                        # 无 </think>：仅保留可能是部分标签的后缀
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                        buffer = keep
                         break
-
-                buffer = text
 
             # 发送剩余内容
             if buffer:
                 if in_think:
-                    yield _build_chunk(msg_id, model, reasoning=buffer)
+                    yield _build_chunk(msg_id, model, created=created_t, reasoning=buffer)
                 else:
-                    yield _build_chunk(msg_id, model, content=buffer)
+                    yield _build_chunk(msg_id, model, created=created_t, content=buffer)
 
-            yield _build_chunk(msg_id, model, finish_reason="stop")
+            yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
 
     except MimoApiError as e:
@@ -434,7 +524,7 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
 # ====== 管理页面 ======
 
 from pathlib import Path as _Path
-_ADMIN_HTML = (_Path(__file__).parent.parent / "web" / "index.html").read_text(encoding="utf-8")
+_ADMIN_HTML = (_Path(__file__).parent / "admin.html").read_text(encoding="utf-8")
 
 @router.get("/admin")
 @router.get("/")

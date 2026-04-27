@@ -34,7 +34,8 @@ class OpenAIDelta(BaseModel):
     """OpenAI流式响应增量"""
     role: Optional[str] = None
     content: Optional[str] = None
-    reasoning: Optional[str] = Field(None, description="深度思考内容")
+    reasoning: Optional[str] = Field(None, description="深度思考内容 (OpenAI o1 格式)")
+    reasoning_content: Optional[str] = Field(None, description="深度思考内容 (DeepSeek 格式)")
     tool_calls: Optional[List[Dict[str, Any]]] = None
 
 
