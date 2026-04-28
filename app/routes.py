@@ -4,6 +4,7 @@ import time
 import uuid
 import json
 import asyncio
+import re
 from typing import Optional, Tuple
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
@@ -133,6 +134,40 @@ async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
 
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
+
+
+def _strip_tool_result_blocks(text: str) -> str:
+    """Remove tool-related prefix labels the model might hallucinate.
+
+    The MiMo model sees tool call/result formats in context and learns to
+    regurgitate them as visible text. Strip all known formats cleanly.
+
+    Known formats:
+      - [TOOL_RESULT]...[/TOOL_RESULT]  (Hermes terminal tool format)
+      - [tool_result id=xxx]             (MiMo2API's own injected format)
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\[/TOOL_RESULT\]\s*', '', cleaned, flags=re.IGNORECASE)
+    # Strip [tool_result id=xxx] (MiMo2API injects this into context, model learns it)
+    cleaned = re.sub(r'\[tool_result\s+id=\S+\]\s*', '', cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def _strip_tool_name_prefix(text: str, tool_names: list) -> str:
+    """Strip tool names that appear as standalone prefix text.
+
+    MiMo model outputs the tool name (e.g., 'webSearch') as a separate SSE
+    text event before the <think> block. Remove it from content output.
+    """
+    if not text or not tool_names:
+        return text
+    # Build a regex that matches any tool name as a standalone line/prefix
+    escaped = '|'.join(re.escape(n) for n in tool_names)
+    # Match tool name at start of text (possibly followed by newline/whitespace)
+    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip())
+    return cleaned.strip()
 
 
 def _safe_flush(text: str) -> Tuple[str, str]:
@@ -309,6 +344,9 @@ async def chat_completions(
     # 非流式响应
     try:
         content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
+        
+        # Strip tool-related labels the model might hallucinate
+        content = _strip_tool_result_blocks(content)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
@@ -316,8 +354,13 @@ async def chat_completions(
         if tools_dict:
             tool_names = get_tool_names(tools_dict)
             tool_call, cleaned = extract_tool_call(content, tool_names)
+            content = cleaned  # Use text with TOOL_CALL/XML labels removed
         else:
-            tool_call, cleaned = None, content
+            tool_call = None
+            tool_names = []
+
+        # Strip tool name prefix (model outputs 'webSearch' etc. as text before <think>)
+        content = _strip_tool_name_prefix(content, tool_names)
 
         if tool_call:
             # 返回工具调用（content 设为 None，避免泄露 TOOL_CALL 文本）
@@ -419,6 +462,9 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
             # 清理 null 字节
             full_content = full_content.replace("\x00", "")
             
+            # Strip [TOOL_RESULT] blocks the model might hallucinate
+            full_content = _strip_tool_result_blocks(full_content)
+            
             # 分离 think 块，提取工具调用
             main_text, think_text = _split_think(full_content)
             tool_names = get_tool_names(tools)
@@ -429,9 +475,11 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
                 streaming_tc = {**tool_call, "index": 0}
                 yield _build_chunk(msg_id, model, created=created_t, tool_calls=[streaming_tc], finish_reason="tool_calls")
             else:
-                # 无工具调用：补发缓冲的正文
-                if content_buffer:
-                    yield _build_chunk(msg_id, model, created=created_t, content=content_buffer)
+                # 无工具调用：补发缓冲的正文（先清洗标签）
+                clean_buffer = _strip_tool_result_blocks(content_buffer) if content_buffer else ""
+                clean_buffer = _strip_tool_name_prefix(clean_buffer, tool_names)  # 去掉模型输出的工具名前缀（如 'webSearch'）
+                if clean_buffer:
+                    yield _build_chunk(msg_id, model, created=created_t, content=clean_buffer)
                 yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             
             yield "data: [DONE]\n\n"
@@ -491,12 +539,14 @@ async def _stream_response(client: MimoClient, query: str, thinking: bool, model
                         buffer = keep
                         break
 
-            # 发送剩余内容
+            # 发送剩余内容（先清洗 [TOOL_RESULT] 防止模型幻觉输出）
             if buffer:
-                if in_think:
-                    yield _build_chunk(msg_id, model, created=created_t, reasoning=buffer)
-                else:
-                    yield _build_chunk(msg_id, model, created=created_t, content=buffer)
+                clean = _strip_tool_result_blocks(buffer)
+                if clean:
+                    if in_think:
+                        yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
+                    else:
+                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
 
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
