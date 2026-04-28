@@ -41,44 +41,39 @@ def _safe_get(d: Any, key: str, default: Any = None) -> Any:
 
 # ─── 构建工具提示词 ──────────────────────────────────────────
 
-def build_tool_prompt(tools: List[Dict[str, Any]]) -> str:
-    """构建简洁的工具提示词 — 放在用户消息之后。
+def build_tool_prompt(tools: List[Dict[str, Any]], max_tools: int = 5, max_desc_len: int = 20) -> str:
+    """构建命令式工具提示词。
 
-    设计原则：用户消息在前（明确任务），工具信息在后（简短参考）。
-    避免模型把工具提示词当成主要任务。
+    MiMo 默认把自己当纯聊天机器人。需要用命令式语气告诉它必须用工具。
     """
     if not tools:
         return ""
 
-    lines = ["[可用工具]"]
+    _ALLOWED = {
+        "web_search", "web_extract", "terminal", "read_file",
+        "write_file", "search_files", "patch",
+        "get_time", "get_time_info", "get_weather", "calculator",
+        "send_message",
+    }
 
+    allowed_tools = []
     for tool in tools:
         func = _safe_get(tool, "function", default={})
         name = _safe_get(func, "name", default="unknown")
-        desc = _safe_get(func, "description", default="")
-        params = _safe_get(func, "parameters", default=None)
+        if name in _ALLOWED:
+            allowed_tools.append(name)
 
-        param_sig = ""
-        if params and isinstance(params, dict):
-            props = params.get("properties") or {}
-            required = set(params.get("required") or [])
-            sig_parts = []
-            for pname, pinfo in props.items():
-                if not isinstance(pinfo, dict):
-                    pinfo = {}
-                marker = "" if pname in required else "?"
-                sig_parts.append(f"{pname}{marker}")
-            if sig_parts:
-                param_sig = ", ".join(sig_parts)
+    if not allowed_tools:
+        return ""
 
-        d = f": {desc}" if desc else ""
-        lines.append(f"- {name}({param_sig}){d}")
+    if len(allowed_tools) > max_tools:
+        allowed_tools = allowed_tools[:max_tools]
 
-    lines.append("")
-    lines.append("需要调用工具时，单独输出一行: TOOL_CALL: \u5de5\u5177\u540d(\u53c2\u6570=\u503c)")
-    lines.append("\u4e0d\u9700\u8981\u8c03\u7528\u5de5\u5177\u65f6\uff0c\u76f4\u63a5\u56de\u7b54\u5373\u53ef\u3002")
-
-    return "\n".join(lines)
+    tool_list = ", ".join(allowed_tools)
+    return (
+        f"可用工具: {tool_list}\n"
+        f"需要时用 TOOL_CALL: name(args) 调用。拿到结果后直接回复用户，不要再重复调用。"
+    )
 
 
 # ─── 提取工具名列表 ──────────────────────────────────────────

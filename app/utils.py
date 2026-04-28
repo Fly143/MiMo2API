@@ -241,6 +241,101 @@ async def upload_media_to_mimo(
             return None
 
 
+def _build_contextual_tool_prompt(tools: list, user_msg: str) -> str:
+    """按需工具注入 — 基础工具始终注入 + 根据关键词追加 2-3 个相关工具。
+
+    基础工具 (始终可用): terminal, search_files, read_file, send_message
+    意图工具 (关键词匹配): web_search, write_file, patch, get_time 等
+
+    避免注入全部工具导致 MiMo 模型幻觉，同时保证多步骤任务（查文件→发消息）可用。
+    """
+    if not tools or not user_msg:
+        return ""
+
+    from .tool_call import _safe_get
+
+    # 白名单候选工具
+    _ALLOWED = {
+        "web_search", "web_extract", "terminal", "read_file",
+        "write_file", "search_files", "patch",
+        "get_time", "get_time_info", "get_weather", "calculator",
+        "send_message",
+    }
+
+    # 基础工具 — 所有请求都注入
+    _BASE_TOOLS = {"terminal", "search_files", "read_file", "send_message"}
+
+    # 关键词 → 优先工具映射
+    _KEYWORD_MAP = [
+        (["文件", "目录", "ls", "列出", "查看文件", "读取", "打开文件",
+          "有什么文件", "哪些文件", "file", "list", "当前目录"],
+         ["search_files", "read_file", "terminal"]),
+        (["搜索", "查找", "查询", "百度", "谷歌", "google", "search",
+          "搜一下", "帮我查", "找一下"],
+         ["web_search", "web_extract"]),
+        (["执行", "运行", "命令", "bash", "shell", "终端", "脚本",
+          "run", "cmd", "exec"],
+         ["terminal"]),
+        (["写入", "保存", "创建文件", "新建", "写文件", "write", "create",
+          "生成文件"],
+         ["write_file", "terminal"]),
+        (["修改", "编辑", "改", "替换", "patch", "edit", "modify",
+          "更新文件"],
+         ["patch", "write_file", "read_file"]),
+        (["时间", "几点", "日期", "time", "date", "clock",
+          "现在几点", "北京时间"],
+         ["get_time", "get_time_info"]),
+        (["天气", "weather", "气温", "下雨"],
+         ["get_weather", "web_search"]),
+        (["计算", "算", "等于", "calculator", "calc", "math"],
+         ["calculator"]),
+        (["网页", "链接", "网站", "url", "打开网页", "提取内容",
+          "extract", "fetch"],
+         ["web_extract", "web_search"]),
+        (["发", "发送", "消息", "微信", "通知", "回复", "send",
+          "message", "msg"],
+         ["send_message"]),
+    ]
+
+    # 匹配关键词
+    matched_tools = set()
+    msg_lower = user_msg.lower()
+
+    for keywords, tool_names in _KEYWORD_MAP:
+        if any(kw.lower() in msg_lower for kw in keywords):
+            for tn in tool_names:
+                if tn in _ALLOWED:
+                    matched_tools.add(tn)
+
+    # 合并基准工具 + 意图匹配工具
+    all_tools = _BASE_TOOLS | matched_tools
+
+    # 从原始 tools 中筛选出匹配的工具定义
+    filtered = []
+    seen = set()
+    for tool in tools:
+        func = _safe_get(tool, "function", default={})
+        name = _safe_get(func, "name", default="")
+        if name in all_tools and name not in seen:
+            filtered.append(tool)
+            seen.add(name)
+
+    # 上限 6 个（基础 4 个 + 意图匹配 ~2 个）
+    if len(filtered) > 6:
+        filtered = filtered[:6]
+
+    if not filtered:
+        return ""
+
+    # 用 build_tool_prompt 生成极简格式
+    from .tool_call import build_tool_prompt
+    prompt = build_tool_prompt(filtered, max_tools=6)
+    # 多步骤提示
+    if len(filtered) > 3:
+        prompt += "如果有多个步骤，可以依次调用工具。"
+    return prompt
+
+
 def build_query_from_messages(
     messages: list,
     tools: list = None,
@@ -253,14 +348,47 @@ def build_query_from_messages(
     格式：用户消息在前（明确任务），工具信息在末尾（简短参考）。
     MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
     系统消息不传给 MiMo（它是 Hermes 自己用的）。
+
+    工具注入策略（v4.4）：
+    - RikkaHub（无 system + tools≤5）→ 全部注入
+    - Hermes（有 system + tools>5）→ 基础工具(4个) + 意图匹配(2个) = 最多6个
     """
     if len(messages) > max_messages:
         messages = messages[-max_messages:]
 
+    # 检测请求类型
+    has_system = any(
+        hasattr(m, 'role') and m.role == "system" or
+        (isinstance(m, dict) and m.get('role') == "system")
+        for m in messages
+    )
+    is_hermes = has_system or (tools and len(tools) > 5)
+
+    # 提取最后一条用户消息内容
+    last_user_content = ""
+    for m in reversed(messages):
+        role = m.role if hasattr(m, 'role') else m.get('role', '')
+        if role == "user":
+            content = m.content if hasattr(m, 'content') else m.get('content', '')
+            if isinstance(content, list):
+                content = " ".join(
+                    p.get("text", "") for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            last_user_content = str(content or "")
+            break
+
+    # Hermes 请求：基础工具(4个) + 意图匹配(2个) = 最多6个
+    # 不给工具 → MiMo 只能纯文本回复 → 无法触发工具循环
+    # RikkaHub 请求（少量工具 + 无 system）：注入极简工具提示（get_time 等已验证可用）
     tool_prompt_text = ""
     if tools:
-        from .tool_call import build_tool_prompt
-        tool_prompt_text = build_tool_prompt(tools)
+        if is_hermes:
+            # 意图匹配：从 20+ 工具中选 2-3 个最相关的
+            tool_prompt_text = _build_contextual_tool_prompt(tools, last_user_content)
+        else:
+            from .tool_call import build_tool_prompt
+            tool_prompt_text = build_tool_prompt(tools)
 
     query_parts = []
 
@@ -293,11 +421,26 @@ def build_query_from_messages(
             content = content[:max_content_len] + "..."
         query_parts.append(f"{role}: {content}")
 
-    if tool_prompt_text:
+    # 工具提示：放用户消息之后
+    # 如果消息里已有工具结果，说明不是第一轮，不再注入完整工具提示词
+    has_tool_result = any(
+        (hasattr(m, 'role') and m.role == "tool") or
+        (isinstance(m, dict) and m.get('role') == "tool")
+        for m in messages
+    )
+    if tool_prompt_text and not has_tool_result:
         query_parts.append(f"\n{tool_prompt_text}")
+    elif has_tool_result and tools:
+        # 后续轮：只列工具名，不加激进指令，避免循环
+        from .tool_call import get_tool_names as _get_tool_names
+        names = _get_tool_names(tools)
+        if len(names) > 6:
+            names = names[:6]
+        query_parts.append(f"\n可用工具: {', '.join(names)}")
 
     result = "\n".join(query_parts)
 
+    # 总长度超限 — 从前面截断（保留后面的消息和工具提示词）
     if len(result) > max_total_len:
         result = result[-max_total_len:]
         nl = result.find("\n")
@@ -306,5 +449,7 @@ def build_query_from_messages(
 
         if tool_prompt_text and tool_prompt_text not in result:
             result += f"\n\n{tool_prompt_text}"
+        elif has_tool_result and "TOOL_CALL: name(args)" not in result:
+            result += "\n需要时可用 TOOL_CALL: name(args) 继续调用工具"
 
     return result
