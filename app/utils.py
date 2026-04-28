@@ -332,9 +332,13 @@ def build_query_from_messages(messages: list, tools: list = None,
         if role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '')
             max_tool_content_len = 500
-            if len(content) > max_tool_content_len:
-                content = content[:max_tool_content_len] + "..."
-            content = f"[tool_result id={tool_call_id[:8]}] {content}"
+            # Strip [TOOL_RESULT] markers from content (Hermes terminal tool format)
+            # to prevent the model from learning and regurgitating this internal format
+            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content)
+            clean = clean.strip()
+            if len(clean) > max_tool_content_len:
+                clean = clean[:max_tool_content_len] + "..."
+            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
 
         # 截断过长的内容
         if len(content) > max_content_len:
@@ -351,4 +355,3 @@ def build_query_from_messages(messages: list, tools: list = None,
             result = result[nl+1:]
 
     return result
-
