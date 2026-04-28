@@ -1,12 +1,10 @@
-"""工具调用模块
+"""
+工具调用模块 — MiMo2API
 
 将 OpenAI function calling 格式转译为 MiMo 可理解的纯文本提示词，
 并从 MiMo 的纯文本响应中解析回结构化 tool_call。
 
-设计原则：
-  1. 防御性编程 — 任何字段缺失/None 都不能崩溃
-  2. 多策略提取 — 正则 + JSON + 关键词匹配，尽力而为
-  3. 单一职责 — 每个函数做一件事
+6 重提取策略 + camelCase 全链路匹配 + 防御性编程。
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ from __future__ import annotations
 import re
 import json
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 __all__ = [
     "build_tool_prompt",
@@ -24,64 +22,66 @@ __all__ = [
     "clean_tool_text",
 ]
 
+# ─── 内部常量 ─────────────────────────────────────────────────
 
-# ─── 构建工具提示词 ────────────────────────────────────────────
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+# ─── 安全取值 ─────────────────────────────────────────────────
+
+def _safe_get(d: Any, key: str, default: Any = None) -> Any:
+    """安全取值 — 兼容 dict、pydantic model、任意对象。"""
+    if d is None:
+        return default
+    if isinstance(d, dict):
+        return d.get(key, default)
+    return getattr(d, key, default)
+
+
+# ─── 构建工具提示词 ──────────────────────────────────────────
 
 def build_tool_prompt(tools: List[Dict[str, Any]]) -> str:
-    """构建工具提示词 — 含格式指令和示例。
+    """构建简洁的工具提示词 — 放在用户消息之后。
 
-    必须告诉模型 TOOL_CALL 输出格式，否则模型会输出各种无法解析的格式
-    （尤其是看到对话历史中的 [调用工具:] 中文标签后会模仿）。
+    设计原则：用户消息在前（明确任务），工具信息在后（简短参考）。
+    避免模型把工具提示词当成主要任务。
     """
     if not tools:
         return ""
 
-    lines = []
-    lines.append("## 可用工具")
-    lines.append("当需要调用工具时，你必须输出以下格式（单独一行）：")
-    lines.append("TOOL_CALL: 工具名(参数1=值1, 参数2=\"值2\")")
-    lines.append("")
-    lines.append("规则:")
-    lines.append("- TOOL_CALL 必须在单独一行，不要加任何前缀或后缀")
-    lines.append("- 括号内参数用逗号分隔，字符串值用双引号包裹")
-    lines.append("- 整数和布尔值不要加引号")
-    lines.append("- 如果需要调用工具，只输出 TOOL_CALL 行，不要同时解释")
-    lines.append("- 如果不需要调用工具，正常回答即可，不要输出 TOOL_CALL")
-    lines.append("")
-    lines.append("示例:")
-    lines.append('TOOL_CALL: get_weather(city="北京")')
-    lines.append('TOOL_CALL: search(query="最新AI新闻", page=1)')
-    lines.append('TOOL_CALL: calculator(expression="3+5*2")')
-    lines.append("")
+    lines = ["[可用工具]"]
 
-    for i, tool in enumerate(tools, 1):
+    for tool in tools:
         func = _safe_get(tool, "function", default={})
-        name = _safe_get(func, "name", default=f"unknown_{i}")
+        name = _safe_get(func, "name", default="unknown")
         desc = _safe_get(func, "description", default="")
         params = _safe_get(func, "parameters", default=None)
 
-        param_lines = []
+        param_sig = ""
         if params and isinstance(params, dict):
             props = params.get("properties") or {}
             required = set(params.get("required") or [])
+            sig_parts = []
             for pname, pinfo in props.items():
                 if not isinstance(pinfo, dict):
                     pinfo = {}
-                ptype = pinfo.get("type", "string")
-                pdesc = pinfo.get("description", "")
-                marker = "*" if pname in required else ""
-                extra = f" — {pdesc}" if pdesc else ""
-                param_lines.append(f"    {pname}{marker} ({ptype}){extra}")
+                marker = "" if pname in required else "?"
+                sig_parts.append(f"{pname}{marker}")
+            if sig_parts:
+                param_sig = ", ".join(sig_parts)
 
-        d = f" — {desc}" if desc else ""
-        lines.append(f"- {name}{d}")
-        if param_lines:
-            lines.extend(param_lines)
+        d = f": {desc}" if desc else ""
+        lines.append(f"- {name}({param_sig}){d}")
+
+    lines.append("")
+    lines.append("需要调用工具时，单独输出一行: TOOL_CALL: \u5de5\u5177\u540d(\u53c2\u6570=\u503c)")
+    lines.append("\u4e0d\u9700\u8981\u8c03\u7528\u5de5\u5177\u65f6\uff0c\u76f4\u63a5\u56de\u7b54\u5373\u53ef\u3002")
 
     return "\n".join(lines)
 
 
-# ─── 提取工具名列表 ───────────────────────────────────────────
+# ─── 提取工具名列表 ──────────────────────────────────────────
 
 def get_tool_names(tools: List[Dict[str, Any]]) -> List[str]:
     """从 tools 列表提取所有 function name。"""
@@ -94,119 +94,352 @@ def get_tool_names(tools: List[Dict[str, Any]]) -> List[str]:
     return names
 
 
-# ─── 从文本中提取工具调用 ──────────────────────────────────────
+# ─── camelCase 工具名解析 ────────────────────────────────────
+
+def _resolve_tool_name(name: str, tool_names: List[str]) -> Optional[str]:
+    """将任意形式的工具名解析为规范的 snake_case。
+
+    4 级匹配：
+      1. 直接匹配 name in tool_names
+      2. 大小写不敏感匹配
+      3. camelCase -> snake_case 转换（getTimeInfo -> get_time_info）
+      4. 转换后大小写不敏感匹配
+    """
+    if not name or not tool_names:
+        return None
+
+    # 1. 直接匹配
+    if name in tool_names:
+        return name
+
+    # 2. 大小写不敏感
+    name_lower = name.lower()
+    for tn in tool_names:
+        if tn.lower() == name_lower:
+            return tn
+
+    # 3. camelCase -> snake_case
+    snake = re.sub(r'(?<=[a-z0-9])([A-Z])', r'_\1', name).lower()
+    if snake in tool_names:
+        return snake
+
+    # 4. snake_case 大小写不敏感
+    for tn in tool_names:
+        if tn.lower() == snake:
+            return tn
+
+    return None
+
+
+# ─── 主入口：从文本中提取工具调用 ──────────────────────────
 
 def extract_tool_call(
     text: str, tool_names: List[str]
-) -> Tuple[Optional[Dict[str, Any]], str]:
+) -> Tuple[Optional[List[Dict[str, Any]]], str]:
     """从 MiMo 输出文本中提取工具调用。
 
-    策略（按优先级）：
-      1. 正则匹配 TOOL_CALL: name(...)
-      2. JSON 解析 {"name": ..., "arguments": ...}
-      3. 关键词匹配 (name) 或 name(...)
+    6 重策略（按优先级）：
+      1. TOOL_CALL: name(args)  — 标准格式
+      2. JSON {"name":"x","arguments":{...}} — 内嵌 JSON
+      3. name(args) 自由文本匹配 — 无 TOOL_CALL 前缀
+      4. <tool_call><function=NAME><parameter=K>V</parameter></function></tool_call> — MiMo XML
+      5. <function_call>{"name":"x","arguments":{...}}</function_call> — JSON+XML
+      6. [调用工具: NAME] — 中文格式退路
 
     Returns:
-        (tool_call_dict_or_None, cleaned_text_without_tool_call)
+        (tool_calls_list_or_None, cleaned_text)
     """
     if not text or not tool_names:
         return None, text
 
-    # 清理 null 字节
     text = text.replace("\x00", "")
 
-    # ── 策略1: TOOL_CALL: name(args) ──
+    # 策略1: TOOL_CALL: name(args)
     tc = _extract_tool_call_pattern(text, tool_names)
     if tc:
-        return tc, _remove_tool_call_text(text)
+        return tc, clean_tool_text(text)
 
-    # ── 策略2: JSON 格式 ──
+    # 策略2: JSON 格式
     tc = _extract_json_tool_call(text, tool_names)
     if tc:
-        return tc, _remove_json_tool_call(text)
+        return tc, clean_tool_text(text)
 
-    # ── 策略3: 自由文本匹配 ──
+    # 策略3: 自由文本 name(args)
     tc = _extract_freeform_tool_call(text, tool_names)
     if tc:
-        return tc, _remove_tool_call_text(text)
+        return tc, clean_tool_text(text)
 
-    # ── 策略4: <tool_call> XML 标签（MiMo 原生格式）──
-    # 匹配: <tool_call><function=NAME><parameter=K>V</parameter>...</function></tool_call>
+    # 策略4: <tool_call> XML（MiMo 原生格式）
     tc = _extract_xml_tool_call(text, tool_names)
     if tc:
-        return tc, _remove_tool_call_text(text)
+        return tc, clean_tool_text(text)
 
-    # ── 策略5: <function_call> XML 标签（内含 JSON）──
-    # 匹配: <function_call>{"name":"x","arguments":{...}}</function_call>
-    fc_pat = r"<function_calls?>(.*?)</function_calls?>"
-    fc_m = re.search(fc_pat, text, re.DOTALL)
-    if fc_m:
-        inner = fc_m.group(1)
-        for block in re.split(r"</function_call>", inner):
-            if not block.strip():
-                continue
-            block = re.sub(r"^.*?<function_call>", "", block, flags=re.DOTALL).strip()
-            if not block:
-                continue
-            js_start = block.find("{")
-            if js_start == -1:
-                continue
-            js = _find_balanced_json(block, js_start)
-            if js:
-                try:
-                    data = json.loads(js)
-                    name = data.get("name", "")
-                    if name and name in tool_names:
-                        args = data.get("arguments", {})
-                        tc = normalize_tool_call({"name": name, "arguments": args})
-                        if tc:
-                            return tc, _remove_tool_call_text(text)
-                except (json.JSONDecodeError, AttributeError):
-                    pass
+    # 策略5: <function_call> JSON+XML
+    tc = _extract_function_call_json(text, tool_names)
+    if tc:
+        return tc, clean_tool_text(text)
 
-    # ── 策略6: [调用工具: NAME] 中文格式 ──
+    # 策略6: [调用工具: NAME] 中文格式
     tc = _extract_chinese_tool_call(text, tool_names)
     if tc:
-        return tc, _remove_tool_call_text(text)
+        return tc, clean_tool_text(text)
 
     return None, text
 
 
+# ─── 策略1: TOOL_CALL: name(...) ────────────────────────────
+
+def _extract_tool_call_pattern(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 TOOL_CALL: name(args) 或 TOOL_CALL: name{...}"""
+    results = []
+    idx = 0
+    while idx < len(text):
+        m = re.search(
+            r"(?:^|\n)\s*TOOL_CALL:\s*(\w+)\s*\(",
+            text[idx:], re.IGNORECASE
+        )
+        if not m:
+            break
+
+        fname = m.group(1)
+        if _is_inside_think(text, idx + m.start()):
+            idx += m.end()
+            continue
+
+        paren = idx + m.end() - 1
+        depth = 1
+        in_s = False
+        esc = False
+        end = -1
+        for i in range(paren + 1, len(text)):
+            c = text[i]
+            if esc:
+                esc = False
+                continue
+            if c == "\\" and in_s:
+                esc = True
+                continue
+            if c == '"':
+                in_s = not in_s
+                continue
+            if in_s:
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+
+        if end == -1:
+            break
+
+        args_raw = text[paren + 1:end]
+        args = _parse_function_args(args_raw)
+
+        resolved = _resolve_tool_name(fname, tool_names)
+        if resolved:
+            results.append({"name": resolved, "arguments": args})
+
+        idx = end + 1
+
+    if results:
+        return [normalize_tool_call(tc) for tc in results if normalize_tool_call(tc)]
+    return None
+
+
+# ─── 策略2: JSON {"name":"x","arguments":{...}} ─────────────
+
+def _extract_json_tool_call(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """从文本中提取 JSON 格式的工具调用。"""
+    # 先尝试用 _find_balanced_json 找到所有可能的 JSON 对象
+    start = 0
+    while True:
+        brace = text.find("{", start)
+        if brace == -1:
+            break
+
+        if _is_inside_think(text, brace):
+            start = brace + 1
+            continue
+
+        js = _find_balanced_json(text, brace)
+        if not js:
+            start = brace + 1
+            continue
+
+        try:
+            obj = json.loads(js)
+        except (json.JSONDecodeError, ValueError):
+            start = brace + 1
+            continue
+
+        # 检查是否是工具调用 JSON
+        name = obj.get("name") or _safe_get(obj.get("function", {}), "name")
+        resolved = _resolve_tool_name(name, tool_names) if name else None
+        if resolved:
+            args = obj.get("arguments") or obj.get("parameters") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            tc = normalize_tool_call({"name": resolved, "arguments": args})
+            if tc:
+                return [tc]
+
+        start = text.find("}", brace + len(js)) + 1
+
+
+# ─── 策略3: name(args) 自由文本 ─────────────────────────────
+
+def _extract_freeform_tool_call(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 name(args) 模式（无 TOOL_CALL 前缀）。
+
+    支持 snake_case 和 camelCase 变体，大小写不敏感。
+    """
+    for name in tool_names:
+        # 构建工具名变体
+        variants = [re.escape(name)]
+        if '_' in name:
+            # 生成 camelCase 变体
+            camel = re.sub(r'_([a-z])', lambda m: m.group(1).upper(), name)
+            variants.append(re.escape(camel))
+
+        escaped = '|'.join(variants)
+        # word boundary 前缀避免句子中间误匹配
+        pat = rf"(?<!\w)({escaped})\s*\((.*?)\)"
+        for m in re.finditer(pat, text, re.DOTALL | re.IGNORECASE):
+            if _is_inside_think(text, m.start()):
+                continue
+            resolved = _resolve_tool_name(m.group(1).strip(), tool_names)
+            if resolved:
+                args_raw = m.group(2).strip()
+                args = _parse_function_args(args_raw)
+                tc = normalize_tool_call({"name": resolved, "arguments": args})
+                if tc:
+                    return [tc]
+
+    return None
+
+
+# ─── 策略4: <tool_call> XML（MiMo 原生） ───────────────────
+
+def _extract_xml_tool_call(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 <tool_call><function=NAME><parameter=K>V</parameter>...</function></tool_call>"""
+    tc_pattern = r"<tool_call>(.*?)</tool_call>"
+    m = re.search(tc_pattern, text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+
+    if _is_inside_think(text, m.start()):
+        return None
+
+    inner = m.group(1)
+
+    func_pattern = r"<function=(\w+)>(.*?)</function>"
+    fm = re.search(func_pattern, inner, re.DOTALL | re.IGNORECASE)
+    if not fm:
+        return None
+
+    name = fm.group(1).strip()
+    resolved = _resolve_tool_name(name, tool_names)
+    if not resolved:
+        return None
+
+    func_body = fm.group(2)
+
+    # 提取 <parameter=KEY>VALUE</parameter>
+    args = {}
+    param_pattern = r"<parameter=(\w+)>(.*?)</parameter>"
+    for pm in re.finditer(param_pattern, func_body, re.DOTALL | re.IGNORECASE):
+        key = pm.group(1).strip()
+        val = pm.group(2).strip()
+        args[key] = _auto_type(val)
+
+    tc = normalize_tool_call({"name": resolved, "arguments": args})
+    return [tc] if tc else None
+
+
+# ─── 策略5: <function_call> JSON+XML ────────────────────────
+
+def _extract_function_call_json(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 <function_call>{"name":"x","arguments":{...}}</function_call>"""
+    fc_pat = r"<function_calls?>(.*?)</function_calls?>"
+    fc_m = re.search(fc_pat, text, re.DOTALL)
+    if not fc_m:
+        return None
+
+    if _is_inside_think(text, fc_m.start()):
+        return None
+
+    inner = fc_m.group(1)
+    for block in re.split(r"</function_call>", inner):
+        if not block.strip():
+            continue
+        block = re.sub(r"^.*?<function_call>", "", block, flags=re.DOTALL).strip()
+        if not block:
+            continue
+        js_start = block.find("{")
+        if js_start == -1:
+            continue
+        js = _find_balanced_json(block, js_start)
+        if js:
+            try:
+                data = json.loads(js)
+                name = data.get("name", "")
+                resolved = _resolve_tool_name(name, tool_names) if name else None
+                if resolved:
+                    args = data.get("arguments", {})
+                    tc = normalize_tool_call({"name": resolved, "arguments": args})
+                    if tc:
+                        return [tc]
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    return None
+
+
+# ─── 策略6: [调用工具: NAME] 中文格式 ───────────────────────
+
 def _extract_chinese_tool_call(
     text: str, tool_names: List[str]
-) -> Optional[Dict[str, Any]]:
-    """策略6: 匹配 [调用工具: NAME] 中文格式（模型从历史中学到的格式）。
-
-    模型看到对话历史中的 [调用工具:] 标签后会模仿，输出类似：
-      [调用工具: terminal]
-      bash
-      pwd && whoami && id
-
-    或：
-      [调用工具: read_file]
-      {"path": "..."}
-    """
-    pat = r"\[调用工具:\s*(\w+(?:,\s*\w+)*)\]"
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 [调用工具: NAME] 中文格式（模型从历史中学到的格式）。"""
+    pat = r"\[\u8c03\u7528\u5de5\u5177:\s*(\w+(?:,\s*\w+)*)\]"
     m = re.search(pat, text)
     if not m:
         return None
 
+    if _is_inside_think(text, m.start()):
+        return None
+
     names = [n.strip() for n in m.group(1).split(",")]
-    # 取第一个可识别的工具名
     found_name = None
     for n in names:
-        if n in tool_names:
-            found_name = n
+        resolved = _resolve_tool_name(n, tool_names)
+        if resolved:
+            found_name = resolved
             break
+
     if not found_name:
         return None
 
-    # 提取标签后面的内容作为参数
     after = text[m.end():].strip()
     args = {}
 
     if after:
-        # 尝试 JSON 格式
         if after.startswith("{"):
             js = _find_balanced_json(after, 0)
             if js:
@@ -215,18 +448,18 @@ def _extract_chinese_tool_call(
                 except json.JSONDecodeError:
                     pass
         else:
-            # 简单格式：第一行当默认参数值
             first_line = after.split("\n")[0].strip()
             if first_line and not first_line.startswith("["):
                 args = {"input": first_line}
 
-    return normalize_tool_call({"name": found_name, "arguments": args})
+    tc = normalize_tool_call({"name": found_name, "arguments": args})
+    return [tc] if tc else None
 
 
-# ─── 标准化工具调用 ────────────────────────────────────────────
+# ─── 标准化工具调用为 OpenAI 格式 ──────────────────────────
 
-def normalize_tool_call(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """将各种格式的 tool_call dict 标准化为 OpenAI 格式。
+def normalize_tool_call(raw: Any) -> Optional[Dict[str, Any]]:
+    """将各种格式的 tool_call 标准化为 OpenAI 格式。
 
     OpenAI 格式:
         {
@@ -239,81 +472,116 @@ def normalize_tool_call(raw: Dict[str, Any]) -> Dict[str, Any]:
         }
     """
     if not raw:
-        return raw
+        return None
+
+    if isinstance(raw, list):
+        raw = raw[0] if raw else {}
+    if not isinstance(raw, dict):
+        return None
 
     # 已经是标准格式
-    if "function" in raw and isinstance(raw["function"], dict):
+    if "function" in raw and isinstance(raw.get("function"), dict):
         func = raw["function"]
-        if "name" in func and "arguments" in func:
+        if "name" in func and func["name"]:
             if "id" not in raw:
                 raw["id"] = f"call_{uuid.uuid4().hex[:24]}"
             if "type" not in raw:
                 raw["type"] = "function"
             # 确保 arguments 是字符串
-            if not isinstance(func["arguments"], str):
+            if "arguments" in func and not isinstance(func["arguments"], str):
                 func["arguments"] = json.dumps(func["arguments"], ensure_ascii=False)
+            elif "arguments" not in func:
+                func["arguments"] = "{}"
             return raw
 
     # 扁平格式: {"name": "xxx", "arguments": {...}}
-    if "name" in raw:
-        args = raw.get("arguments") or raw.get("parameters") or raw.get("args") or {}
-        if not isinstance(args, str):
-            args = json.dumps(args, ensure_ascii=False)
-        return {
-            "id": f"call_{uuid.uuid4().hex[:24]}",
-            "type": "function",
-            "function": {
-                "name": raw["name"],
-                "arguments": args,
-            },
-        }
+    name = raw.get("name")
+    if not name:
+        return None
 
-    return raw
+    args = raw.get("arguments") or raw.get("parameters") or raw.get("args") or {}
+    if not isinstance(args, str):
+        args = json.dumps(args, ensure_ascii=False)
+
+    return {
+        "id": f"call_{uuid.uuid4().hex[:24]}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": args,
+        },
+    }
 
 
-# ─── 清理工具文本 ──────────────────────────────────────────────
+# ─── 清理工具文本 ──────────────────────────────────────────
 
 def clean_tool_text(text: str) -> str:
-    """清理文本中的工具调用残留痕迹。"""
+    """清理文本中的工具调用残留痕迹。
+
+    移除所有已知格式的标签，保留纯自然语言内容。
+    """
     if not text:
         return text
 
-    # 移除 TOOL_CALL: xxx 行
-    text = re.sub(r"TOOL_CALL:\s*\S+.*", "", text, flags=re.MULTILINE)
-    # 移除 <function_call> / <function_calls> 标签
+    # TOOL_CALL: xxx 行
+    text = re.sub(r"TOOL_CALL:.*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    # TOOL_CALL: name(...) 内联
+    text = re.sub(
+        r"TOOL_CALL:\s*\w+\s*\([^)]*(?:\([^)]*\)[^)]*)*\)",
+        "", text, flags=re.IGNORECASE
+    )
+    # <function_call> / <function_calls> 标签
     text = re.sub(r"</?function_calls?>", "", text)
-    # 移除 <tool_call>...</tool_call> 整块
-    text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # 移除 <function=xxx> 和 <parameter=xxx> 标签
-    text = re.sub(r"<function=\w+>.*?</function>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<parameter=\w+>.*?</parameter>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # 移除 [调用工具: xxx] 中文格式
-    text = re.sub(r"\[\s*调用工具\s*:\s*\w+(?:\s*,\s*\w+)*\s*\].*", "", text, flags=re.MULTILINE)
-    # 移除多余的空行
+    # <tool_call>...</tool_call>
+    text = re.sub(
+        r"<tool_call>.*?</tool_call>", "",
+        text, flags=re.DOTALL | re.IGNORECASE
+    )
+    # <function=xxx>...</function>
+    text = re.sub(
+        r"<function=\w+>.*?</function>", "",
+        text, flags=re.DOTALL | re.IGNORECASE
+    )
+    # <parameter=xxx>...</parameter>
+    text = re.sub(
+        r"<parameter=\w+>.*?</parameter>", "",
+        text, flags=re.DOTALL | re.IGNORECASE
+    )
+    # python调用工具(xxx) 残留
+    text = re.sub(r"</?function=\w+>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<parameter=\w+>", "", text)
+    text = re.sub(r"</parameter>", "", text)
+    # [调用工具: xxx] 中文格式
+    text = re.sub(
+        r"\[\s*\u8c03\u7528\u5de5\u5177\s*:\s*\w+(?:\s*,\s*\w+)*\s*\].*",
+        "", text, flags=re.MULTILINE
+    )
+    # JSON tool_call 块
+    text = re.sub(
+        r"```(?:json)?\s*\n?\s*\{.*?\"tool_call\".*?\}\s*\n?\s*```",
+        "", text, flags=re.DOTALL
+    )
+    # 空代码块
+    text = re.sub(r"```\w*\s*\n?\s*```", "", text)
+    # 多余空行
     text = re.sub(r"\n{3,}", "\n\n", text)
+
     return text.strip()
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 # 内部辅助函数
-# ═══════════════════════════════════════════════════════════════
-
-def _safe_get(d: Any, key: str, default: Any = None) -> Any:
-    """安全取值 —— 对 dict、pydantic model、任意对象都能用。"""
-    if d is None:
-        return default
-    if isinstance(d, dict):
-        return d.get(key, default)
-    return getattr(d, key, default)
-
+# ═══════════════════════════════════════════════════════════
 
 def _find_balanced_json(text: str, start: int) -> str:
-    """从 start 位置开始查找配对的 JSON 对象 {...}，处理好字符串转义。"""
+    """从 start 位置查找配对的 JSON {}，处理字符串转义。"""
     if start >= len(text) or text[start] != "{":
         return ""
+
     depth = 0
     in_str = False
     esc = False
+
     for i in range(start, len(text)):
         c = text[i]
         if esc:
@@ -332,184 +600,95 @@ def _find_balanced_json(text: str, start: int) -> str:
         elif c == "}":
             depth -= 1
             if depth == 0:
-                return text[start : i + 1]
+                return text[start:i + 1]
+
     return ""
 
 
-def _extract_xml_tool_call(
-    text: str, tool_names: List[str]
-) -> Optional[Dict[str, Any]]:
-    """策略4: 匹配 <tool_call><function=NAME><parameter=K>V</parameter>...</function></tool_call>"""
-    # 查找 <tool_call>...</tool_call> 块
-    tc_pattern = r"<tool_call>(.*?)</tool_call>"
-    m = re.search(tc_pattern, text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return None
-
-    inner = m.group(1)
-
-    # 提取 <function=NAME> ... </function>
-    func_pattern = r"<function=(\w+)>(.*?)</function>"
-    fm = re.search(func_pattern, inner, re.DOTALL | re.IGNORECASE)
-    if not fm:
-        return None
-
-    name = fm.group(1).strip()
-    if name not in tool_names:
-        return None
-
-    func_body = fm.group(2)
-
-    # 提取 <parameter=KEY>VALUE</parameter>
-    args = {}
-    param_pattern = r"<parameter=(\w+)>(.*?)</parameter>"
-    for pm in re.finditer(param_pattern, func_body, re.DOTALL | re.IGNORECASE):
-        key = pm.group(1).strip()
-        val = pm.group(2).strip()
-        args[key] = _auto_type(val)
-
-    return normalize_tool_call({"name": name, "arguments": args})
-
-
-def _extract_tool_call_pattern(
-    text: str, tool_names: List[str]
-) -> Optional[Dict[str, Any]]:
-    """策略1: 匹配 TOOL_CALL: name(...) 或 TOOL_CALL: name{...}"""
-    # 匹配 TOOL_CALL: xxx(...)
-    pattern = r"TOOL_CALL:\s*(\w+)\s*\((.*?)\)"
-    match = re.search(pattern, text, re.DOTALL)
-    if not match:
-        # 尝试 TOOL_CALL: name{...}  (JSON args)
-        pattern2 = r"TOOL_CALL:\s*(\w+)\s*\{(.+?)\}\s*$"
-        match = re.search(pattern2, text, re.DOTALL | re.MULTILINE)
-
-    if not match:
-        return None
-
-    name = match.group(1).strip()
-    if name not in tool_names:
-        return None
-
-    args_raw = match.group(2).strip()
-    args = _parse_args_text(args_raw)
-
-    return normalize_tool_call({"name": name, "arguments": args})
-
-
-def _extract_json_tool_call(
-    text: str, tool_names: List[str]
-) -> Optional[Dict[str, Any]]:
-    """策略2: 文本中包含 JSON 工具调用。"""
-    # 尝试找 JSON 块
-    json_patterns = [
-        r"\{[^{}]*\"(?:name|function)\"[^{}]*\}",       # 简单 JSON
-        r"\{[^{}]*\"(?:name|function)\"[^{}]*\"arguments\"[^{}]*\}",
-    ]
-    for pat in json_patterns:
-        for m in re.finditer(pat, text, re.DOTALL):
-            try:
-                obj = json.loads(m.group())
-                name = obj.get("name") or _safe_get(
-                    obj.get("function", {}), "name"
-                )
-                if name and name in tool_names:
-                    args = obj.get("arguments") or obj.get("parameters") or {}
-                    if not isinstance(args, str):
-                        args = json.dumps(args, ensure_ascii=False)
-                    return normalize_tool_call({"name": name, "arguments": args})
-            except (json.JSONDecodeError, AttributeError):
-                continue
-
-    # 尝试匹配更大的 JSON 块 (带嵌套)
-    try:
-        start = text.find("{")
-        while start != -1:
-            depth = 0
-            for i in range(start, min(start + 2000, len(text))):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        candidate = text[start : i + 1]
-                        try:
-                            obj = json.loads(candidate)
-                            name = (
-                                obj.get("name")
-                                or _safe_get(obj.get("function", {}), "name")
-                            )
-                            if name and name in tool_names:
-                                args = (
-                                    obj.get("arguments")
-                                    or obj.get("parameters")
-                                    or {}
-                                )
-                                if not isinstance(args, str):
-                                    args = json.dumps(args, ensure_ascii=False)
-                                return normalize_tool_call(
-                                    {"name": name, "arguments": args}
-                                )
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
-                        break
-            start = text.find("{", start + 1)
-    except Exception:
-        pass
-
-    return None
-
-
-def _extract_freeform_tool_call(
-    text: str, tool_names: List[str]
-) -> Optional[Dict[str, Any]]:
-    """策略3: 自由文本匹配 —— 模型可能输出类似 call_xxx(yyy) 的内容。"""
-    for name in tool_names:
-        # 匹配 name(args) 模式
-        pat = rf"(?:^|\s){re.escape(name)}\s*\((.+?)\)"
-        m = re.search(pat, text, re.DOTALL)
-        if m:
-            args_raw = m.group(1).strip()
-            args = _parse_args_text(args_raw)
-            return normalize_tool_call({"name": name, "arguments": args})
-
-    return None
-
-
-def _parse_args_text(raw: str) -> str:
-    """将函数参数文本转为 JSON 字符串。
+def _parse_function_args(raw: str) -> Dict[str, Any]:
+    """解析函数参数字符串到 dict。
 
     支持格式:
       key="value", key2=123
-      key=value, key2=value2
-      "json string"
+      key=value
+      {"json": "object"}
     """
     raw = raw.strip()
     if not raw:
-        return "{}"
+        return {}
 
-    # 如果已经是 JSON 对象
+    # 已经是 JSON 对象
     if raw.startswith("{") and raw.endswith("}"):
         try:
-            obj = json.loads(raw)
-            return json.dumps(obj, ensure_ascii=False)
-        except json.JSONDecodeError:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
             pass
 
-    # key=value 解析
+    # key=value 格式，用智能分割处理嵌套
     args = {}
-    # 匹配 key="value" 或 key=value 或 key=123
-    pattern = r'(\w+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^,\s]+))'
-    for m in re.finditer(pattern, raw):
-        key = m.group(1)
-        val = m.group(2) or m.group(3) or m.group(4)
-        # 尝试解析数字和布尔
-        args[key] = _auto_type(val)
+    for pair in _smart_split(raw, ","):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        k, v = pair.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k:
+            args[k] = _auto_type(v)
 
     if args:
-        return json.dumps(args, ensure_ascii=False)
+        return args
 
-    # 无法解析，原样返回
-    return json.dumps(raw, ensure_ascii=False)
+    # 无法解析，返回原文本作为 input
+    return {"input": raw}
+
+
+def _smart_split(text: str, sep: str) -> List[str]:
+    """智能分割字符串，正确处理括号嵌套和引号。"""
+    parts = []
+    current = []
+    dp = db = dbr = 0  # 括号深度
+    in_str = False
+    esc = False
+
+    for ch in text:
+        if esc:
+            current.append(ch)
+            esc = False
+            continue
+        if ch == "\\" and in_str:
+            current.append(ch)
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            current.append(ch)
+            continue
+        if in_str:
+            current.append(ch)
+            continue
+        if ch == "(":
+            dp += 1
+        elif ch == ")":
+            dp -= 1
+        elif ch == "[":
+            db += 1
+        elif ch == "]":
+            db -= 1
+        elif ch == "{":
+            dbr += 1
+        elif ch == "}":
+            dbr -= 1
+        elif ch == sep and dp == 0 and db == 0 and dbr == 0:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+
+    if current:
+        parts.append("".join(current).strip())
+
+    return parts
 
 
 def _auto_type(val: str) -> Any:
@@ -518,7 +697,7 @@ def _auto_type(val: str) -> Any:
         return True
     if val.lower() == "false":
         return False
-    if val.lower() == "null" or val.lower() == "none":
+    if val.lower() in ("null", "none"):
         return None
     try:
         return int(val)
@@ -531,47 +710,17 @@ def _auto_type(val: str) -> Any:
     return val
 
 
-def _remove_tool_call_text(text: str) -> str:
-    """移除文本中的 TOOL_CALL 行和 XML 工具调用标签。"""
-    # 移除 TOOL_CALL: xxx 行
-    cleaned = re.sub(r"TOOL_CALL:.*$", "", text, flags=re.MULTILINE)
-    # 移除 <function_call> / <function_calls> 标签
-    cleaned = re.sub(r"</?function_calls?>", "", cleaned)
-    # 移除 <tool_call>...</tool_call> 整块
-    cleaned = re.sub(r"<tool_call>.*?</tool_call>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-    # 移除残留的 <function=xxx>...</function> 和 <parameter=xxx>...</parameter>
-    cleaned = re.sub(r"</?function=\w+>", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"<parameter=\w+>.*?</parameter>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
-    # 移除 [调用工具: xxx] 中文格式及其后续参数行
-    cleaned = re.sub(r"\[\s*调用工具\s*:\s*\w+(?:\s*,\s*\w+)*\s*\].*", "", cleaned, flags=re.MULTILINE)
-    return cleaned.strip()
-
-
-def _remove_json_tool_call(text: str) -> str:
-    """移除文本中的 JSON 工具调用块。"""
-    # 尝试找到并移除 JSON 块
-    cleaned = text
-    start = cleaned.find("{")
-    while start != -1:
-        depth = 0
-        for i in range(start, min(start + 2000, len(cleaned))):
-            if cleaned[i] == "{":
-                depth += 1
-            elif cleaned[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = cleaned[start : i + 1]
-                    try:
-                        obj = json.loads(candidate)
-                        name = obj.get("name") or _safe_get(
-                            obj.get("function", {}), "name"
-                        )
-                        if name:
-                            cleaned = cleaned[:start] + cleaned[i + 1 :]
-                            break
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-                    break
-        start = cleaned.find("{", start + 1)
-
-    return cleaned.strip()
+def _is_inside_think(text: str, pos: int) -> bool:
+    """检查 pos 是否在 <think>...</think> 块内部。"""
+    sf = 0
+    while True:
+        s = text.find(THINK_OPEN, sf)
+        if s == -1:
+            break
+        e = text.find(THINK_CLOSE, s + 7)
+        if e == -1:
+            return pos >= s
+        if s <= pos < e + 8:
+            return True
+        sf = e + 8
+    return False

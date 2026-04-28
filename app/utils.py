@@ -1,29 +1,24 @@
-"""工具函数"""
+"""工具函数 — MiMo2API
+
+凭证解析、媒体提取/上传、消息构建。
+"""
 
 import re
 import hashlib
+import json as _json
 import httpx
 from typing import Optional, List, Tuple, Dict, Any
 from .config import MimoAccount
 
 
 def parse_curl(curl_command: str) -> Optional[MimoAccount]:
-    """
-    解析cURL命令提取Mimo账号凭证
-
-    Args:
-        curl_command: cURL命令字符串
-
-    Returns:
-        MimoAccount对象或None
-    """
+    """解析cURL命令提取Mimo账号凭证。"""
     account = {
         'service_token': '',
         'user_id': '',
         'xiaomichatbot_ph': ''
     }
 
-    # 提取cookies（支持多种格式）
     cookie_match = re.search(r"(?:-b|--cookie)\s+'([^']+)'", curl_command)
     if not cookie_match:
         cookie_match = re.search(r'(?:-b|--cookie)\s+"([^"]+)"', curl_command)
@@ -36,71 +31,43 @@ def parse_curl(curl_command: str) -> Optional[MimoAccount]:
 
     cookies = cookie_match.group(1)
 
-    # 提取serviceToken
     service_token_match = re.search(r'serviceToken="([^"]+)"', cookies)
     if service_token_match:
         account['service_token'] = service_token_match.group(1)
 
-    # 提取userId
     user_id_match = re.search(r'userId=(\d+)', cookies)
     if user_id_match:
         account['user_id'] = user_id_match.group(1)
 
-    # 提取xiaomichatbot_ph
     ph_match = re.search(r'xiaomichatbot_ph="([^"]+)"', cookies)
     if ph_match:
         account['xiaomichatbot_ph'] = ph_match.group(1)
 
-    # 验证必需字段
     if not account['service_token']:
         return None
 
     return MimoAccount(**account)
 
 
-def safe_utf8_len(text: str, max_len: int) -> int:
-    """
-    安全的UTF-8字符串长度计算，避免在多字节字符中间截断
-
-    Args:
-        text: 文本字符串
-        max_len: 最大长度
-
-    Returns:
-        安全的截断长度
-    """
-    if max_len <= 0 or max_len >= len(text):
-        return len(text)
-    return max_len
-
-
 def extract_medias_from_messages(messages: list) -> Tuple[str, list, list]:
-    """
-    从消息列表中提取图片/视频/音频媒体
-
-    Args:
-        messages: 消息列表 (OpenAIMessage对象列表)
-
-    Returns:
-        (query_text, base64_medias, processed_messages)
-    """
+    """从消息列表中提取图片/视频/音频媒体。"""
     base64_medias = []
     seen_base64 = set()
-
     processed_messages = []
+
     for msg in messages:
         text = ""
         content = msg.content or ""
 
         if isinstance(content, list):
-            # 多模态格式: content 是数组
             for item in content:
                 if not isinstance(item, dict):
                     continue
                 if item.get("type") == "text":
                     text += item.get("text", "")
                 elif item.get("type") == "image_url":
-                    url = item.get("image_url", {}).get("url", "")
+                    img_url = item.get("image_url", {})
+                    url = img_url.get("url", "") if isinstance(img_url, dict) else str(img_url)
                     if url and url.startswith("data:"):
                         base64 = url.split(",", 1)[1] if "," in url else url
                         if base64 and base64 not in seen_base64:
@@ -113,21 +80,55 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list]:
                             seen_base64.add(base64)
         else:
             text = str(content) if content else ""
-        # 处理工具调用消息
+
         if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            calls = msg.tool_calls
-            text = f"[工具调用] {calls}"
-        # 处理工具返回结果
+            text = _serialize_tool_calls(msg.tool_calls)
+
         if msg.role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '')
-            text = f"[工具结果 ID:{tool_call_id}] {text}"
+            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
+            text = f"[tool_result id={tool_call_id[:8]}] {clean}"
 
         processed_messages.append({"role": msg.role, "text": text})
 
-    # query 只取最后一条消息的文本
     query_text = processed_messages[-1]["text"] if processed_messages else ""
-
     return query_text, base64_medias, processed_messages
+
+
+def _serialize_tool_calls(tool_calls: list) -> str:
+    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
+    tc_lines = []
+    for tc in tool_calls:
+        fn = _safe_nested_get(tc, "function")
+        if not fn:
+            continue
+        fname = _safe_nested_get(fn, "name", "")
+        args_str = _safe_nested_get(fn, "arguments", "{}")
+
+        try:
+            args = _json.loads(args_str) if isinstance(args_str, str) else args_str
+            if isinstance(args, dict):
+                kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
+            else:
+                kv = str(args)
+        except Exception:
+            kv = str(args_str)
+
+        tc_lines.append(f"TOOL_CALL: {fname}({kv})")
+
+    return "\n".join(tc_lines)
+
+
+def _safe_nested_get(obj, *keys, default=None):
+    """安全嵌套取值 — 兼容 dict 和 pydantic model。"""
+    for key in keys:
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            obj = obj.get(key, default)
+        else:
+            obj = getattr(obj, key, default)
+    return obj
 
 
 async def upload_media_to_mimo(
@@ -136,24 +137,10 @@ async def upload_media_to_mimo(
     account: MimoAccount,
     model: str = "mimo-v2-omni"
 ) -> Optional[Dict[str, Any]]:
+    """上传媒体文件到小米Mimo服务器。
+
+    三步流程：genUploadInfo -> PUT 上传 -> resource/parse
     """
-    上传媒体文件到小米Mimo服务器
-
-    三步流程:
-    1. genUploadInfo -> 获取上传签名URL
-    2. PUT 上传二进制数据
-    3. resource/parse -> 注册解析，获取资源ID
-
-    Args:
-        base64_data: base64编码的文件数据（不含data:前缀）
-        mime_type: MIME类型 (image/jpeg, image/png, video/mp4等)
-        account: Mimo账号凭证
-        model: 模型名
-
-    Returns:
-        media对象 或 None (上传失败)
-    """
-    # 解析纯base64
     if "," in base64_data:
         base64_data = base64_data.split(",", 1)[1]
 
@@ -178,7 +165,6 @@ async def upload_media_to_mimo(
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            # Step 1: genUploadInfo
             ph = account.xiaomichatbot_ph
             info_res = await client.post(
                 f"https://aistudio.xiaomimimo.com/open-apis/resource/genUploadInfo?xiaomichatbot_ph={ph}",
@@ -194,17 +180,12 @@ async def upload_media_to_mimo(
             resource_url = info_data["data"]["resourceUrl"]
             object_name = info_data["data"]["objectName"]
 
-            # Step 2: PUT 上传二进制数据
-            put_headers = {
-                "Content-Type": "application/octet-stream",
-                "content-md5": md5
-            }
+            put_headers = {"Content-Type": "application/octet-stream", "content-md5": md5}
             put_res = await client.put(upload_url, content=binary_data, headers=put_headers)
             if put_res.status_code != 200:
                 print(f"[uploadMedia] PUT failed: {put_res.status_code}")
                 return None
 
-            # Step 3: resource/parse
             parse_url = (
                 f"https://aistudio.xiaomimimo.com/open-apis/resource/parse"
                 f"?fileUrl={resource_url}"
@@ -260,39 +241,36 @@ async def upload_media_to_mimo(
             return None
 
 
-def build_query_from_messages(messages: list, tools: list = None,
-                               max_messages: int = 6, max_content_len: int = 2000,
-                               max_total_len: int = 8000) -> str:
-    """
-    从消息列表构建查询字符串
+def build_query_from_messages(
+    messages: list,
+    tools: list = None,
+    max_messages: int = 6,
+    max_content_len: int = 2000,
+    max_total_len: int = 8000
+) -> str:
+    """从消息列表构建查询字符串。
 
-    Args:
-        messages: 消息列表
-        tools: 工具定义列表
-        max_messages: 最大消息数量
-        max_content_len: 单条消息最大长度
-        max_total_len: query 总最大长度
-
-    Returns:
-        查询字符串
+    格式：用户消息在前（明确任务），工具信息在末尾（简短参考）。
+    MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
+    系统消息不传给 MiMo（它是 Hermes 自己用的）。
     """
-    # 只保留最后N条消息
     if len(messages) > max_messages:
         messages = messages[-max_messages:]
 
-    query_parts = []
-
-    # 如果有工具定义，添加工具提示词
+    tool_prompt_text = ""
     if tools:
         from .tool_call import build_tool_prompt
-        tool_prompt = build_tool_prompt(tools)
-        query_parts.append(f"system: {tool_prompt}")
+        tool_prompt_text = build_tool_prompt(tools)
+
+    query_parts = []
 
     for msg in messages:
         role = msg.role
         content = msg.content or ""
 
-        # 处理多模态消息（content是数组）
+        if role == "system":
+            continue
+
         if isinstance(content, list):
             text_parts = []
             for item in content:
@@ -300,58 +278,33 @@ def build_query_from_messages(messages: list, tools: list = None,
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
 
-        # 处理 tool_calls 消息 — 用 TOOL_CALL 格式序列化，与提示词一致
         if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            tc_lines = []
-            for tc in msg.tool_calls:
-                if isinstance(tc, dict):
-                    fn = tc.get("function", {})
-                    fname = fn.get("name", "")
-                    args_str = fn.get("arguments", "{}")
-                    try:
-                        import json as _json
-                        args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-                        kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
-                    except Exception:
-                        kv = str(args_str)
-                    tc_lines.append(f"TOOL_CALL: {fname}({kv})")
-                elif hasattr(tc, 'function'):
-                    fn = tc.function
-                    fname = getattr(fn, 'name', '')
-                    args_str = getattr(fn, 'arguments', '{}')
-                    try:
-                        import json as _json
-                        args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-                        kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
-                    except Exception:
-                        kv = str(args_str)
-                    tc_lines.append(f"TOOL_CALL: {fname}({kv})")
-            content = "\n".join(tc_lines)
+            content = _serialize_tool_calls(msg.tool_calls)
 
-        # 处理 tool 返回结果 - 截断避免撑爆 query
         if role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '')
-            max_tool_content_len = 500
-            # Strip [TOOL_RESULT] markers from content (Hermes terminal tool format)
-            # to prevent the model from learning and regurgitating this internal format
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content)
+            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
             clean = clean.strip()
-            if len(clean) > max_tool_content_len:
-                clean = clean[:max_tool_content_len] + "..."
+            if len(clean) > 500:
+                clean = clean[:500] + "..."
             content = f"[tool_result id={tool_call_id[:8]}] {clean}"
 
-        # 截断过长的内容
         if len(content) > max_content_len:
             content = content[:max_content_len] + "..."
         query_parts.append(f"{role}: {content}")
 
+    if tool_prompt_text:
+        query_parts.append(f"\n{tool_prompt_text}")
+
     result = "\n".join(query_parts)
 
-    # 总长度超限时，从前面截断（保留最后的消息）
     if len(result) > max_total_len:
         result = result[-max_total_len:]
         nl = result.find("\n")
         if nl > 0:
-            result = result[nl+1:]
+            result = result[nl + 1:]
+
+        if tool_prompt_text and tool_prompt_text not in result:
+            result += f"\n\n{tool_prompt_text}"
 
     return result

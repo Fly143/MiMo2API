@@ -22,6 +22,11 @@ class MimoClient:
     API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
     TIMEOUT = 120.0
 
+    # MiMo API 原生 SSE 事件前缀（始终在 SSE #2 输出，独立于我们的工具定义）
+    _MIMO_SSE_PREFIXES = {'webSearch', 'getTime', 'getTimeInfo', 'sessionSearch',
+                          'imageSearch', 'fileSearch', 'getLocation', 'webExtract',
+                          'getWeather', 'calculator'}
+
     def __init__(self, account: MimoAccount):
         self.account = account
 
@@ -93,7 +98,9 @@ class MimoClient:
                         if isinstance(sse_data, dict):
                             if sse_data.get("type") == "text":
                                 content = sse_data.get("content", "")
-                                result.append(content)
+                                # 过滤 MiMo 原生前缀
+                                if content.strip() not in self._MIMO_SSE_PREFIXES:
+                                    result.append(content)
                             if "promptTokens" in sse_data:
                                 usage = {
                                     "promptTokens": sse_data.get("promptTokens", 0),
@@ -116,9 +123,11 @@ class MimoClient:
         调用Mimo API（流式）
 
         Yields:
-            SSE数据字典（仅 type=text 且有 content 的）
+            SSE数据字典（仅 type=text 且有 content 的，已过滤 MiMo 原生前缀）
         """
         body = self._create_request_body(query, thinking, model, multi_medias)
+
+        chunk_count = 0
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             async with client.stream(
@@ -133,7 +142,6 @@ class MimoClient:
                     error_body = await response.aread()
                     raise MimoApiError(response.status_code, error_body.decode(errors="replace"))
 
-                chunk_count = 0
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -156,6 +164,12 @@ class MimoClient:
                             _df.write(f"[SSE #{chunk_count}] type={sse_data.get('type','?')} content={repr(sse_data.get('content',''))[:200]} keys={list(sse_data.keys())}\n")
                     except Exception:
                         pass
+
+                    # 过滤 MiMo 原生 SSE 前缀事件（如 SSE #2 的 'webSearch'）
+                    if sse_data.get("type") == "text" and sse_data.get("content"):
+                        content_val = sse_data["content"].strip()
+                        if content_val in self._MIMO_SSE_PREFIXES:
+                            continue  # 跳过 MiMo 原生的工具名 SSE 事件
 
                     # 只 yield text 类型且有内容的事件
                     if sse_data.get("type") == "text" and sse_data.get("content"):
