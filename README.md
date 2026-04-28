@@ -117,8 +117,6 @@ python main.py
 
 ### 方法1：Cookie 导入
 
-适用于**手机 Chrome**（不支持 `javascript:`，用开发者工具 Application → Cookies）：
-
 1. 访问 https://aistudio.xiaomimimo.com 并登录
 2. 打开 **开发者工具** → **Application** → **Storage → Cookies**
 3. 找到以下三个关键 Cookie：
