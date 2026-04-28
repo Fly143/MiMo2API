@@ -433,7 +433,7 @@ pip install -r requirements.txt
 | 限制 | 说明 |
 |------|------|
 | Token 有效期 | serviceToken 约 24 小时过期，过期后需重新登录 |
-| 多模态模型 | 仅 `mimo-v2-omni` 支持图片；自动切换模型会导致请求 model 与响应 model 不一致 |
+| 多模态模型 | 仅 `mimo-v2-omni、mimo-v2.5` 支持图片；自动切换模型会导致请求 model 与响应 model 不一致 |
 | TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
 | 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
 | 不支持 Embeddings | 仅实现 Chat Completions 端点 |
