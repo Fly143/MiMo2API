@@ -416,7 +416,8 @@ async def _stream_response(
     try:
         if has_tools:
             # ═══════════════════════════════════════════════════
-            # 有工具定义：reasoning 流式，正文缓冲
+            # 有工具定义：reasoning 流式，正文也流式（RikkaHub 需要）
+            # 同时缓冲用于工具调用提取
             # ═══════════════════════════════════════════════════
             full_content = ""          # 完整原始文本（用于工具调用提取）
             content_buffer = ""        # 缓冲的正文（用于无工具调用时输出）
@@ -439,6 +440,12 @@ async def _stream_response(
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
                                 content_buffer += safe
+                                # Stream content immediately
+                                clean = _strip_tool_result_blocks(safe)
+                                clean = _strip_citations(clean)
+                                clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
+                                if clean:
+                                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
                             in_think = True
                             buffer = buffer[idx + len(THINK_OPEN):]
                             continue
@@ -446,6 +453,12 @@ async def _stream_response(
                         safe, keep = _safe_flush(buffer)
                         if safe:
                             content_buffer += safe
+                            # Stream content immediately
+                            clean = _strip_tool_result_blocks(safe)
+                            clean = _strip_citations(clean)
+                            clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
+                            if clean:
+                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
                         buffer = keep
                         break
                     else:
@@ -480,31 +493,18 @@ async def _stream_response(
             tool_names = get_tool_names(tools)
             result = extract_tool_call(main_text, tool_names)
 
-            # extract_tool_call 可能返回 (List[Dict], str) 或 (Dict, str)
             if result and result[0]:
                 tool_calls = result[0] if isinstance(result[0], list) else [result[0]]
                 cleaned_main = result[1] if len(result) > 1 else clean_tool_text(main_text)
 
                 if tool_calls:
-                    # 有工具调用：只发 tool_calls
                     streaming_tc = [{**tc, "index": 0} for tc in tool_calls]
                     yield _build_chunk(msg_id, model, created=created_t,
                                        tool_calls=streaming_tc, finish_reason="tool_calls")
                     yield "data: [DONE]\n\n"
                     return
 
-            # 无工具调用：补发缓冲的正文
-            # 使用 cleaned_main（来自 extract_tool_call）—— 与工具调用提取一致
-            if content_buffer:
-                clean_output = _strip_tool_result_blocks(content_buffer)
-                clean_output = _strip_citations(clean_output)
-                clean_output = _strip_tool_name_prefix(clean_output, tool_names)
-            else:
-                clean_output = ""
-
-            if clean_output:
-                yield _build_chunk(msg_id, model, created=created_t, content=clean_output)
-
+            # 无工具调用：content 已经流式发送，只发 finish
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
 
