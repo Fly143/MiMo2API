@@ -377,22 +377,30 @@
         }
 
         async function testAcct(i) {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '测试中...';
             try {
                 const r = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
                 const d = await r.json();
                 toast(d.ok ? '✅ 有效: ' + (d.response || '').substring(0, 40) : '❌ ' + d.error, !d.ok);
                 loadAccounts();
             } catch (e) { toast('测试失败', true); }
+            btn.disabled = false;
+            btn.textContent = '测试';
         }
 
         async function testAll() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = '测试中...';
             try {
                 const r = await fetch('/api/accounts');
                 const d = await r.json();
-                if (!d.accounts || !d.accounts.length) { toast('无账号可测试', true); return; }
-                toast('测试中...');
+                if (!d.accounts || !d.accounts.length) { toast('无账号可测试', true); btn.disabled = false; btn.textContent = '测试全部'; return; }
                 let ok = 0;
                 for (let i = 0; i < d.accounts.length; i++) {
+                    btn.textContent = '测试中...(' + (i + 1) + '/' + d.accounts.length + ')';
                     try {
                         const r2 = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
                         const d2 = await r2.json();
@@ -402,6 +410,8 @@
                 toast(ok + '/' + d.accounts.length + ' 有效');
                 loadAccounts();
             } catch (e) { toast('请求失败', true); }
+            btn.disabled = false;
+            btn.textContent = '测试全部';
         }
 
         async function delAcct(i) {
@@ -419,4 +429,3 @@
     </script>
 </body>
 </html>
-
