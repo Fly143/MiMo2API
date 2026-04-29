@@ -41,39 +41,25 @@ def _safe_get(d: Any, key: str, default: Any = None) -> Any:
 
 # ─── 构建工具提示词 ──────────────────────────────────────────
 
-def build_tool_prompt(tools: List[Dict[str, Any]], max_tools: int = 5, max_desc_len: int = 20) -> str:
-    """构建命令式工具提示词。
-
-    MiMo 默认把自己当纯聊天机器人。需要用命令式语气告诉它必须用工具。
-    """
+def build_tool_prompt(tools: List[Dict[str, Any]]) -> str:
+    """构建极简工具提示词，动态提取客户端 tools 的名称和描述。"""
     if not tools:
         return ""
-
-    _ALLOWED = {
-        "web_search", "web_extract", "terminal", "read_file",
-        "write_file", "search_files", "patch",
-        "get_time", "get_time_info", "get_weather", "calculator",
-        "send_message",
-    }
-
-    allowed_tools = []
+    parts = []
     for tool in tools:
         func = _safe_get(tool, "function", default={})
-        name = _safe_get(func, "name", default="unknown")
-        if name in _ALLOWED:
-            allowed_tools.append(name)
-
-    if not allowed_tools:
+        name = _safe_get(func, "name", default="")
+        if not name:
+            continue
+        desc = _safe_get(func, "description", default="")
+        short_desc = desc.split("\n")[0].strip()
+        if short_desc:
+            parts.append(f"{name}({short_desc})")
+        else:
+            parts.append(name)
+    if not parts:
         return ""
-
-    if len(allowed_tools) > max_tools:
-        allowed_tools = allowed_tools[:max_tools]
-
-    tool_list = ", ".join(allowed_tools)
-    return (
-        f"可用工具: {tool_list}\n"
-        f"需要时用 TOOL_CALL: name(args) 调用。拿到结果后直接回复用户，不要再重复调用。"
-    )
+    return "可用工具: " + ", ".join(parts)
 
 
 # ─── 提取工具名列表 ──────────────────────────────────────────

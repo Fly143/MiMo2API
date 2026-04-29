@@ -158,12 +158,12 @@ class MimoClient:
                     if not isinstance(sse_data, dict):
                         continue
 
-                    # DEBUG 日志
-                    try:
-                        with open('/data/data/com.termux/files/home/MiMo2API/debug_api.log', 'a') as _df:
-                            _df.write(f"[SSE #{chunk_count}] type={sse_data.get('type','?')} content={repr(sse_data.get('content',''))[:200]} keys={list(sse_data.keys())}\n")
-                    except Exception:
-                        pass
+                    # DEBUG 日志（已关闭）
+                    # try:
+                    #     with open('/data/data/com.termux/files/home/MiMo2API/debug_api.log', 'a') as _df:
+                    #         _df.write(f"[SSE #{chunk_count}] type={sse_data.get('type','?')} content={repr(sse_data.get('content',''))[:200]} keys={list(sse_data.keys())}\n")
+                    # except Exception:
+                    #     pass
 
                     # 过滤 MiMo 原生 SSE 前缀事件（如 SSE #2 的 'webSearch'）
                     if sse_data.get("type") == "text" and sse_data.get("content"):

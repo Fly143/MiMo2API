@@ -241,92 +241,9 @@ async def upload_media_to_mimo(
             return None
 
 
-def _build_contextual_tool_prompt(tools: list, user_msg: str) -> str:
-    """按需工具注入 — 基础工具始终注入 + 根据关键词追加 2-3 个相关工具。"""
-    if not tools or not user_msg:
-        return ""
-
-    from .tool_call import _safe_get
-
-    _ALLOWED = {
-        "web_search", "web_extract", "terminal", "read_file",
-        "write_file", "search_files", "patch",
-        "get_time", "get_time_info", "get_weather", "calculator",
-        "send_message",
-    }
-
-    _BASE_TOOLS = {"terminal", "search_files", "read_file", "send_message"}
-
-    _KEYWORD_MAP = [
-        (["文件", "目录", "ls", "列出", "查看文件", "读取", "打开文件",
-          "有什么文件", "哪些文件", "file", "list", "当前目录"],
-         ["search_files", "read_file", "terminal"]),
-        (["搜索", "查找", "查询", "百度", "谷歌", "google", "search",
-          "搜一下", "帮我查", "找一下"],
-         ["web_search", "web_extract"]),
-        (["执行", "运行", "命令", "bash", "shell", "终端", "脚本",
-          "run", "cmd", "exec"],
-         ["terminal"]),
-        (["写入", "保存", "创建文件", "新建", "写文件", "write", "create",
-          "生成文件"],
-         ["write_file", "terminal"]),
-        (["修改", "编辑", "改", "替换", "patch", "edit", "modify",
-          "更新文件"],
-         ["patch", "write_file", "read_file"]),
-        (["时间", "几点", "日期", "time", "date", "clock",
-          "现在几点", "北京时间"],
-         ["get_time", "get_time_info"]),
-        (["天气", "weather", "气温", "下雨"],
-         ["get_weather", "web_search"]),
-        (["计算", "算", "等于", "calculator", "calc", "math"],
-         ["calculator"]),
-        (["网页", "链接", "网站", "url", "打开网页", "提取内容",
-          "extract", "fetch"],
-         ["web_extract", "web_search"]),
-        (["发", "发送", "消息", "微信", "通知", "回复", "send",
-          "message", "msg"],
-         ["send_message"]),
-    ]
-
-    matched_tools = set()
-    msg_lower = user_msg.lower()
-
-    for keywords, tool_names in _KEYWORD_MAP:
-        if any(kw.lower() in msg_lower for kw in keywords):
-            for tn in tool_names:
-                if tn in _ALLOWED:
-                    matched_tools.add(tn)
-
-    all_tools = _BASE_TOOLS | matched_tools
-
-    filtered = []
-    seen = set()
-    for tool in tools:
-        func = _safe_get(tool, "function", default={})
-        name = _safe_get(func, "name", default="")
-        if name in all_tools and name not in seen:
-            filtered.append(tool)
-            seen.add(name)
-
-    if len(filtered) > 6:
-        filtered = filtered[:6]
-
-    if not filtered:
-        return ""
-
-    from .tool_call import build_tool_prompt
-    prompt = build_tool_prompt(filtered, max_tools=6)
-    if len(filtered) > 3:
-        prompt += "如果有多个步骤，可以依次调用工具。"
-    return prompt
-
-
 def build_query_from_messages(
     messages: list,
     tools: list = None,
-    max_messages: int = 6,
-    max_content_len: int = 2000,
-    max_total_len: int = 32000
 ) -> str:
     """从消息列表构建查询字符串。
 
@@ -334,39 +251,7 @@ def build_query_from_messages(
     MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
     系统消息不传给 MiMo（它是 Hermes 自己用的）。
     """
-    if len(messages) > max_messages:
-        messages = messages[-max_messages:]
-
-    # 检测请求类型
-    has_system = any(
-        hasattr(m, 'role') and m.role == "system" or
-        (isinstance(m, dict) and m.get('role') == "system")
-        for m in messages
-    )
-    is_hermes = has_system or (tools and len(tools) > 5)
-
-    # 提取最后一条用户消息内容
-    last_user_content = ""
-    for m in reversed(messages):
-        role = m.role if hasattr(m, 'role') else m.get('role', '')
-        if role == "user":
-            content = m.content if hasattr(m, 'content') else m.get('content', '')
-            if isinstance(content, list):
-                content = " ".join(
-                    p.get("text", "") for p in content
-                    if isinstance(p, dict) and p.get("type") == "text"
-                )
-            last_user_content = str(content or "")
-            break
-
-    # 工具注入策略
-    tool_prompt_text = ""
-    if tools:
-        if is_hermes:
-            tool_prompt_text = _build_contextual_tool_prompt(tools, last_user_content)
-        else:
-            from .tool_call import build_tool_prompt
-            tool_prompt_text = build_tool_prompt(tools)
+    from .tool_call import build_tool_prompt
 
     query_parts = []
 
@@ -391,34 +276,16 @@ def build_query_from_messages(
             tool_call_id = getattr(msg, 'tool_call_id', '')
             clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
             clean = clean.strip()
-            if len(clean) > 2000:
-                clean = clean[:2000] + "..."
             content = f"[tool_result id={tool_call_id[:8]}] {clean}"
 
-        if len(content) > max_content_len:
-            content = content[:max_content_len] + "..."
         query_parts.append(f"{role}: {content}")
 
     result = "\n".join(query_parts)
 
-    # v5.5: 从客户端 tools 动态提取名称和描述，注入极简工具提示。
+    # 注入工具提示
     if tools:
-        from .tool_call import _safe_get
-        parts = []
-        for tool in tools:
-            func = _safe_get(tool, "function", default={})
-            name = _safe_get(func, "name", default="")
-            if not name:
-                continue
-            desc = _safe_get(func, "description", default="")
-            # 取描述第一行，不截断
-            short_desc = desc.split("\n")[0].strip()
-            if short_desc:
-                parts.append(f"{name}({short_desc})")
-            else:
-                parts.append(name)
-        if parts:
-            result += f"\n可用工具: {', '.join(parts)}"
+        tool_prompt = build_tool_prompt(tools)
+        if tool_prompt:
+            result += f"\n{tool_prompt}"
 
-    # 去掉总长度限制，让 MiMo API 自己处理超长
     return result
