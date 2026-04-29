@@ -136,10 +136,10 @@ def extract_tool_call(
     6 重策略（按优先级）：
       1. TOOL_CALL: name(args)  — 标准格式
       2. JSON {"name":"x","arguments":{...}} — 内嵌 JSON
-      3. name(args) 自由文本匹配 — 无 TOOL_CALL 前缀
-      4. <tool_call><function=NAME><parameter=K>V</parameter></function></tool_call> — MiMo XML
-      5. <function_call>{"name":"x","arguments":{...}}</function_call> — JSON+XML
-      6. [调用工具: NAME] — 中文格式退路
+      3. <tool_call> XML — MiMo 原生格式
+      4. <function_call> JSON+XML
+      5. [调用工具: NAME] — 中文格式
+      6. name(args) 自由文本 — 低优先级
 
     Returns:
         (tool_calls_list_or_None, cleaned_text)
@@ -159,23 +159,23 @@ def extract_tool_call(
     if tc:
         return tc, clean_tool_text(text)
 
-    # 策略3: 自由文本 name(args)
-    tc = _extract_freeform_tool_call(text, tool_names)
-    if tc:
-        return tc, clean_tool_text(text)
-
-    # 策略4: <tool_call> XML（MiMo 原生格式）
+    # 策略3: <tool_call> XML
     tc = _extract_xml_tool_call(text, tool_names)
     if tc:
         return tc, clean_tool_text(text)
 
-    # 策略5: <function_call> JSON+XML
+    # 策略4: <function_call> JSON+XML
     tc = _extract_function_call_json(text, tool_names)
     if tc:
         return tc, clean_tool_text(text)
 
-    # 策略6: [调用工具: NAME] 中文格式
+    # 策略5: [调用工具: NAME] 中文格式
     tc = _extract_chinese_tool_call(text, tool_names)
+    if tc:
+        return tc, clean_tool_text(text)
+
+    # 策略6: 自由文本 name(args)（低优先级）
+    tc = _extract_freeform_tool_call(text, tool_names)
     if tc:
         return tc, clean_tool_text(text)
 

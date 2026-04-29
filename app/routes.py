@@ -20,7 +20,7 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo
-from .tool_call import extract_tool_call, normalize_tool_call, build_tool_prompt, get_tool_names, clean_tool_text
+from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 
 router = APIRouter()
 
@@ -135,6 +135,13 @@ def _strip_tool_result_blocks(text: str) -> str:
     cleaned = re.sub(r'\[/TOOL_RESULT\]\s*', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'\[tool_result\s+id=\S+\]\s*', '', cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
+
+
+def _strip_citations(text: str) -> str:
+    """移除 MiMo 模型输出的引用标记，如 (citation:1)(citation:14)。"""
+    if not text:
+        return text
+    return re.sub(r'\(citation:\d+\)\s*', '', text).strip()
 
 
 def _camel_case(name: str) -> str:
@@ -274,22 +281,24 @@ async def chat_completions(
 ):
     """OpenAI兼容的聊天接口。"""
 
-    # 请求日志
-    try:
-        print(f"[REQ] model={request.model} stream={request.stream} "
-              f"tools={len(request.tools) if request.tools else 0} "
-              f"tool_choice={request.tool_choice} reasoning_effort={request.reasoning_effort}")
-        try:
-            logf = Path.home() / 'mimo_requests.log'
-            with open(str(logf), 'a') as rf:
-                import datetime as dt2
-                full = request.model_dump(exclude_none=True)
-                full['_timestamp'] = dt2.datetime.now().isoformat()
-                rf.write(json.dumps(full, ensure_ascii=False) + '\n')
-        except Exception:
-            pass
-    except Exception:
-        pass
+    # # 请求日志（发版时关闭）
+    # try:
+    #     print(f"[REQ] model={request.model} stream={request.stream} "
+    #           f"tools={len(request.tools) if request.tools else 0} "
+    #           f"tool_choice={request.tool_choice} reasoning_effort={request.reasoning_effort}")
+    #     try:
+    #         logf = Path.home() / 'mimo_requests.log'
+    #         if logf.exists() and logf.stat().st_size > 5 * 1024 * 1024:
+    #             logf.write_text('')
+    #         with open(str(logf), 'a') as rf:
+    #             import datetime as dt2
+    #             full = request.model_dump(exclude_none=True)
+    #             full['_timestamp'] = dt2.datetime.now().isoformat()
+    #             rf.write(json.dumps(full, ensure_ascii=False) + '\n')
+    #     except Exception:
+    #         pass
+    # except Exception:
+    #     pass
 
     if not validate_api_key(authorization):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
@@ -337,8 +346,9 @@ async def chat_completions(
     try:
         content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
 
-        # 清理模型幻觉标签
+        # 清理模型输出杂质
         content = _strip_tool_result_blocks(content)
+        content = _strip_citations(content)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
@@ -463,6 +473,7 @@ async def _stream_response(
 
             # 清理 TOOL_RESULT 标签
             full_content = _strip_tool_result_blocks(full_content)
+            full_content = _strip_citations(full_content)
 
             # 分离 think 块，提取工具调用
             main_text, think_text = _split_think(full_content)
@@ -486,6 +497,7 @@ async def _stream_response(
             # 使用 cleaned_main（来自 extract_tool_call）—— 与工具调用提取一致
             if content_buffer:
                 clean_output = _strip_tool_result_blocks(content_buffer)
+                clean_output = _strip_citations(clean_output)
                 clean_output = _strip_tool_name_prefix(clean_output, tool_names)
             else:
                 clean_output = ""
@@ -545,6 +557,7 @@ async def _stream_response(
             # 发送剩余内容
             if buffer:
                 clean = _strip_tool_result_blocks(buffer)
+                clean = _strip_citations(clean)
                 clean = _strip_mimo_prefix(clean)
                 if clean:
                     if in_think:
@@ -565,11 +578,13 @@ async def _stream_response(
         yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        log_path = Path(__file__).parent.parent / "error.log"
-        with open(log_path, "a") as f:
-            f.write(f"=== STREAM ERROR ===\n{tb}\n\n")
+        # import traceback
+        # tb = traceback.format_exc()
+        # log_path = Path(__file__).parent.parent / "error.log"
+        # if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
+        #     log_path.write_text('')
+        # with open(log_path, "a") as f:
+        #     f.write(f"=== STREAM ERROR ===\n{tb}\n\n")
         yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
         yield "data: [DONE]\n\n"
 
