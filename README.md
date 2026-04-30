@@ -83,7 +83,7 @@
 ### 一键部署
 
 ```bash
-# 方式一：直接克隆（推荐）
+# 直接克隆（推荐）
 git clone -b no-tools https://github.com/Fly143/MiMo2API.git
 cd MiMo2API
 chmod +x deploy.sh
