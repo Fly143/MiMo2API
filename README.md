@@ -1,395 +1,403 @@
-     1|     1|# MiMo2API
-     2|     2|
-     3|     3|[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-     4|     4|[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-     5|     5|[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
-     6|     6|
-     7|     7|将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片）、多账号负载均衡。**本分支不含工具调用逻辑，专注纯对话，输出质量更高。**
-     8|     8|
-     9|     9|
-    10|    10|本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
-    11|    11|本项目所修改代码均为ai完成，不含任何一句人工代码，望周知！
-    12|    12|
-    13|    13|
-    14|    14|
-    15|    15|## 目录
-    16|    16|
-    17|    17|- [特性](#特性)
-    18|    18|- [架构](#架构)
-    19|    19|- [快速开始](#快速开始)
-    20|    20|  - [一键部署](#一键部署)
-    21|    21|  - [手动安装](#手动安装)
-    22|    22|- [配置凭证](#配置凭证)
-    23|    23|  - [方法1：Cookie 导入](#方法1cookie-导入)
-    24|    24|  - [方法2：cURL 导入](#方法2curl-导入)
-    25|    25|  - [多账号管理](#多账号管理)
-    26|    26|- [API 使用](#api-使用)
-    27|    27|  - [列出模型](#1-列出模型)
-    28|    28|  - [文本对话](#2-文本对话)
-    29|    29|  - [流式对话](#3-流式对话)
-    30|    30|  - [多模态（图片理解）](#4-多模态图片理解)
-    31|    31|      32|  - [深度思考模式](#6-深度思考模式)
-    32|    33|  - [模型发现与刷新](#7-模型发现与刷新)
-    33|    34|    35|- [管理命令](#管理命令)
-    34|    36|- [项目结构](#项目结构)
-    35|    37|- [配置参考](#配置参考)
-    36|    38|- [依赖](#依赖)
-    37|    39|- [限制与已知问题](#限制与已知问题)
-    38|    40|- [常见问题](#常见问题)
-    39|    41|- [许可](#许可)
-    40|    42|
-    41|    43|## 特性
-    42|    44|
-    43|    45|- **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
-    44|    46|    47|- **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）
-    45|    48|- **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
-    46|    49|- **多账号池** — 管理面板配置多个 MiMo 账号，轮询负载均衡，自动故障转移
-    47|    50|- **动态模型发现** — 启动时从 MiMo 官方 API 实时拉取可用模型列表，无需手动维护
-    48|    51|- **凭证管理** — 支持 Cookie 导入、cURL 导入两种配置方式
-    49|    52|- **CORS 全开** — 允许任意来源跨域访问
-    50|    53|
-    51|    54|## 架构
-    52|    55|
-    53|    56|```
-    54|    57|┌──────────────────────────────────────────────────────────┐
-    55|    58|│                     OpenAI 兼容客户端                        │
-    56|    59|│            (ChatBox / LobeChat / curl / SDK)              │
-    57|    60|└───────────────┬──────────────────────────────────────────┘
-    58|    61|                │  /v1/chat/completions
-    59|    62|                ▼
-    60|    63|┌──────────────────────────────────────────────────────────┐
-    61|    64|│                     MiMo2API (FastAPI)                      │
-    62|    65|│  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-    63|    66|│  │ routes  │  │  tool_call   │  │     mimo_client      │ │
-    64|    67|│  │ (API)   │──│ (5策略提取)   │──│ (HTTP/SSE 代理)       │ │
-    65|    68|│  └─────────┘  └──────────────┘  └──────────────────────┘ │
-    66|    69|│  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
-    67|    70|│  │ config  │  │    utils     │  │      models           │ │
-    68|    71|│  │ (多账号) │  │ (图片上传等)  │  │ (OpenAI 数据模型)     │ │
-    69|    72|│  └─────────┘  └──────────────┘  └──────────────────────┘ │
-    70|    73|└───────────────┬──────────────────────────────────────────┘
-    71|    74|                │  HTTPS (SSE)
-    72|    75|                ▼
-    73|    76|┌──────────────────────────────────────────────────────────┐
-    74|    77|│              MiMo API (aistudio.xiaomimimo.com)           │
-    75|    78|│              /open-apis/bot/chat (SSE)                    │
-    76|    79|└──────────────────────────────────────────────────────────┘
-    77|    80|```
-    78|    81|
-    79|    82|## 快速开始
-    80|    83|
-    81|    84|### 一键部署
-    82|    85|
-    83|    86|```bash
-    84|    87|tar xzf MiMo2API.tar.gz
-    85|    88|cd MiMo2API
-    86|    89|chmod +x deploy.sh
-    87|    90|./deploy.sh
-    88|    91|```
-    89|    92|
-    90|    93|部署完成后，服务已在 **前台** 启动。见下方[管理命令](#管理命令)了解后台运行等方式。
-    91|    94|
-    92|    95|### 手动安装
-    93|    96|
-    94|    97|```bash
-    95|    98|# 1. 创建虚拟环境
-    96|    99|python3 -m venv venv
-    97|   100|source venv/bin/activate
-    98|   101|
-    99|   102|# 2. 安装依赖
-   100|   103|pip install -r requirements.txt
-   101|   104|
-   102|   105|# 3. 创建配置文件
-   103|   106|cp config.example.json config.json
-   104|   107|
-   105|   108|# 4. 启动
-   106|   109|python main.py
-   107|   110|```
-   108|   111|
-   109|   112|启动后访问：**http://localhost:8080**
-   110|   113|
-   111|   114|## 配置凭证
-   112|   115|
-   113|   116|打开管理面板 http://localhost:8080 进行配置。
-   114|   117|
-   115|   118|### 方法1：Cookie 导入
-   116|   119|
-   117|   120|1. 访问 https://aistudio.xiaomimimo.com 并登录
-   118|   121|2. 打开 **开发者工具** → **Application** → **Storage → Cookies**
-   119|   122|3. 找到以下三个关键 Cookie：
-   120|   123|   - `serviceToken` — 服务凭证（最重要）
-   121|   124|   - `userId` — 用户 ID（纯数字）
-   122|   125|   - `xiaomichatbot_ph` — 会话标识
-   123|   126|4. 填入管理面板 → 保存
-   124|   127|
-   125|   128|> **提示：** serviceToken 有效期很短（约 24 小时），过期后需要重新导入。
-   126|   129|
-   127|   130|### 方法2：cURL 导入
-   128|   131|
-   129|   132|1. 登录 aistudio.xiaomimimo.com
-   130|   133|2. 打开**开发者工具** → **Network** 面板
-   131|   134|3. 发送一条消息，找到 `chat` 请求（SSE 类型）
-   132|   135|4. 右键 → **Copy as cURL**
-   133|   136|5. 粘贴到管理面板 → 自动解析并保存
-   134|   137|
-   135|   138|### 多账号管理
-   136|   139|
-   137|   140|支持添加**多个账号**，代理会**自动轮询**使用：
-   138|   141|- 每个请求从账号池取下一个 → 降低单账号限频风险
-   139|   142|- 支持测试连接、删除、替换已有账号
-   140|   143|- 同一个 userId 重复导入会自动更新（不重复添加）
-   141|   144|
-   142|   145|## API 使用
-   143|   146|
-   144|   147|### 1. 列出模型
-   145|   148|
-   146|   149|```bash
-   147|   150|curl http://localhost:8080/v1/models \
-   148|   151|  -H "Authorization: Bearer ***
-   149|   152|```
-   150|   153|
-   151|   154|返回模型列表会显示所有 MiMo 官方当前可用的模型。
-   152|   155|
-   153|   156|### 2. 文本对话
-   154|   157|
-   155|   158|```bash
-   156|   159|curl http://localhost:8080/v1/chat/completions \
-   157|   160|  -H "Authorization: Bearer *** \
-   158|   161|  -H "Content-Type: application/json" \
-   159|   162|  -d '{
-   160|   163|    "model": "mimo-v2-flash",
-   161|   164|    "messages": [
-   162|   165|      {"role": "user", "content": "你好，请用中文回复"}
-   163|   166|    ]
-   164|   167|  }'
-   165|   168|```
-   166|   169|
-   167|   170|### 3. 流式对话
-   168|   171|
-   169|   172|```bash
-   170|   173|curl http://localhost:8080/v1/chat/completions \
-   171|   174|  -H "Authorization: Bearer *** \
-   172|   175|  -H "Content-Type: application/json" \
-   173|   176|  -d '{
-   174|   177|    "model": "mimo-v2-flash",
-   175|   178|    "messages": [
-   176|   179|      {"role": "user", "content": "讲个故事"}
-   177|   180|    ],
-   178|   181|    "stream": true
-   179|   182|  }'
-   180|   183|```
-   181|   184|
-   182|   185|返回标准 SSE 流（`data: ...\n\n`），以 `data: [DONE]\n\n` 结束。
-   183|   186|
-   184|   187|### 4. 多模态（图片理解）
-   185|   188|
-   186|   189|需要选择 **omni/v2.5** 模型。支持两种图片格式：
-   187|   190|
-   188|   191|**URL 方式：**
-   189|   192|```bash
-   190|   193|curl http://localhost:8080/v1/chat/completions \
-   191|   194|  -H "Authorization: Bearer *** \
-   192|   195|  -H "Content-Type: application/json" \
-   193|   196|  -d '{
-   194|   197|    "model": "mimo-v2-omni",
-   195|   198|    "messages": [{
-   196|   199|      "role": "user",
-   197|   200|      "content": [
-   198|   201|        {"type": "text", "text": "这张图片里有什么？"},
-   199|   202|        {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}}
-   200|   203|      ]
-   201|   204|    }]
-   202|   205|  }'
-   203|   206|```
-   204|   207|
-   205|   208|**Base64 方式：**
-   206|   209|```bash
-   207|   210|curl http://localhost:8080/v1/chat/completions \
-   208|   211|  -H "Authorization: Bearer *** \
-   209|   212|  -H "Content-Type: application/json" \
-   210|   213|  -d '{
-   211|   214|    "model": "mimo-v2-omni",
-   212|   215|    "messages": [{
-   213|   216|      "role": "user",
-   214|   217|      "content": [
-   215|   218|        {"type": "text", "text": "描述这张图片"},
-   216|   219|        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ..."}}
-   217|   220|      ]
-   218|   221|    }]
-   219|   222|  }'
-   220|   223|```
-   221|   224|
-   222|   225|> **原理：** 代理会自动完成三步上传流程：`genUploadInfo` 获取签名 URL → `PUT` 上传原始数据 → `resource/parse` 注册解析，然后将 `multiMedias` 参数传入聊天 API。
-   223|   226|
-   224|   227### 5. 深度思考模式
-   225|   279|
-   226|   280|使用 `reasoning_effort` 参数启用深度思考：
-   227|   281|
-   228|   282|```bash
-   229|   283|curl http://localhost:8080/v1/chat/completions \
-   230|   284|  -H "Authorization: Bearer *** \
-   231|   285|  -H "Content-Type: application/json" \
-   232|   286|  -d '{
-   233|   287|    "model": "mimo-v2-pro",
-   234|   288|    "messages": [
-   235|   289|      {"role": "user", "content": "证明根号2是无理数"}
-   236|   290|    ],
-   237|   291|    "reasoning_effort": "high",
-   238|   292|    "stream": true
-   239|   293|  }'
-   240|   294|```
-   241|   295|
-   242|   296|流式响应中会包含 `reasoning` 字段（对应 MiMo 的 `<think>` 块），内容与文本分开输出。
-   243|   297|
-   244|   298|### 6. 模型发现与刷新
-   245|   299|
-   246|   300|模型列表**启动时自动探测**，从 `https://aistudio.xiaomimimo.com/open-apis/bot/config` 实时拉取，无需手动配置。
-   247|   301|
-   248|   302|```bash
-   249|   303|# 强制刷新模型列表
-   250|   304|curl -X POST http://localhost:8080/v1/models/refresh \
-   251|   305|  -H "Authorization: Bearer ***
-   252|   306|```
-   253|   307|
-   254|   308## 管理命令
-   255|   337|
-   256|   338|```bash
-   257|   339|# 前台运行（Ctrl+C 停止）
-   258|   340|./venv/bin/python main.py
-   259|   341|
-   260|   342|# 后台运行
-   261|   343|nohup ./venv/bin/python main.py > mimo.log 2>&1 &
-   262|   344|echo $! > mimo.pid
-   263|   345|
-   264|   346|# 从 PID 文件停止
-   265|   347|kill $(cat mimo.pid)
-   266|   348|
-   267|   349|# 按进程名停止
-   268|   350|pkill -f "python main.py"
-   269|   351|
-   270|   352|# 查看实时日志
-   271|   353|tail -f mimo.log
-   272|   354|
-   273|   355|# 查看进程状态
-   274|   356|ps aux | grep "python main.py"
-   275|   357|
-   276|   358|# 查看端口占用
-   277|   359|lsof -i :8080
-   278|   360|```
-   279|   361|
-   280|   362|**启动后：**
-   281|   363|
-   282|   364|| 地址 | 说明 |
-   283|   365||------|------|
-   284|   366|| `http://localhost:8080` | Web 管理后台（配置账号） |
-   285|   367|| `http://localhost:8080/v1` | OpenAI 兼容 API 根路径 |
-   286|   368|| `http://localhost:8080/docs` | Swagger API 文档 |
-   287|   369|
-   288|   370|## 项目结构
-   289|   371|
-   290|   372|```
-   291|   373|MiMo2API/
-   292|   374|├── main.py                  # 入口，FastAPI 应用创建 + uvicorn 启动
-   293|   375|├── deploy.sh                # 一键部署脚本（安装依赖、初始化配置）
-   294|   376|├── requirements.txt         # Python 依赖
-   295|   377|├── config.example.json      # 配置文件模板
-   296|   378|├── config.json              # 实际配置（.gitignore，含凭证）
-   297|   379|└── app/
-   298|   380|    ├── __init__.py
-   299|   381|    ├── routes.py            # API 路由（chat/models/管理面板/账号CRUD）
-   300|   382|    ├── models.py            # OpenAI 兼容数据模型（Pydantic）
-   301|   383|    ├── mimo_client.py       # MiMo API 客户端（HTTP SSE 流处理）
-   302|   384|    ├── config.py            # 配置管理（多账号、线程安全、轮询）
-   303|   385|    ├── utils.py             # 工具函数（cURL解析、图片上传、消息构建）
-   304|   386|   387|    └── admin.html           # Web 管理面板（内嵌单文件）
-   305|   388|```
-   306|   389|
-   307|   390|## 配置参考
-   308|   391|
-   309|   392|`config.json` 完整配置项：
-   310|   393|
-   311|   394|```json
-   312|   395|{
-   313|   396|  "api_keys": "sk-mimo,sk-another",
-   314|   397|  "mimo_accounts": [
-   315|   398|    {
-   316|   399|      "service_token": "eyJ...",
-   317|   400|      "user_id": "123456",
-   318|   401|      "xiaomichatbot_ph": "abc123...",
-   319|   402|      "is_valid": true,
-   320|   403|      "login_time": "04-26 17:00",
-   321|   404|      "last_test": "04-26 17:05"
-   322|   405|    }
-   323|   406|  ],
-   324|   407|  "models": []
-   325|   408|}
-   326|   409|```
-   327|   410|
-   328|   411|| 配置项 | 说明 | 默认值 |
-   329|   412||--------|------|--------|
-   330|   413|| `api_keys` | 逗号分隔的 API Key 列表 | `sk-mimo` |
-   331|   414|| `mimo_accounts` | MiMo 账号列表（可多个） | `[]` |
-   332|   415|| `models` | 自定义模型列表（空数组=自动探测） | `[]` |
-   333|   416|
-   334|   417|**环境变量：** `PORT` — 监听端口（默认 `8080`）
-   335|   418|
-   336|   419|## 依赖
-   337|   420|
-   338|   421|- **Python 3.10+**
-   339|   422|- FastAPI 0.115
-   340|   423|- uvicorn 0.32
-   341|   424|- httpx 0.27
-   342|   425|- Pydantic v2
-   343|   426|
-   344|   427|```bash
-   345|   428|pip install -r requirements.txt
-   346|   429|```
-   347|   430|
-   348|   431|## 限制与已知问题
-   349|   432|
-   350|   433|| 限制 | 说明 |
-   351|   434||------|------|
-   352|   435|| Token 有效期 | serviceToken 约 24 小时过期，过期后需重新登录 |
-   353|   436|| 多模态模型 | 仅 `mimo-v2-omni、mimo-v2.5` 支持图片；自动切换模型会导致请求 model 与响应 model 不一致 |
-   354|   437|| TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
-   355|   438|| 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
-   356|   439|| 不支持 Embeddings | 仅实现 Chat Completions 端点 |
-   357|   440|| 非流式实际走 SSE | MiMo API 只提供 SSE 流，非流式请求会缓冲全部 SSE 后合并返回 |
-   358|   441|
-   359|   442|## 常见问题
-   360|   443|
-   361|   444|**Q: 为什么返回 401 "invalid api key"？**
-   362|   445|A: 检查 `Authorization` header 是否携带了正确的 API Key。默认是 `sk-mimo`，可在 `config.json` 中修改。
-   363|   446|
-   364|   447|**Q: 为什么返回 503 "no mimo account"？**
-   365|   448|A: 管理面板中没有配置账号，或者所有账号都已失效。请登录 http://localhost:8080 添加有效账号。
-   366|   449|
-   367|   450|**Q: 图片上传失败怎么办？**
-   368|   451|A: 可能是 Cookie 过期导致上传签名获取失败。重新导入 Cookie/login 即可。
-   369|   452|
-   370|   453|**Q: tool_call 没有被提取？**
-   371|   454|A: 查看日志确认响应内容。如果 MiMo 没有按预期输出工具调用格式，可能是提示词不够清晰，或者该模型理解力有限。推荐使用 `mimo-v2-pro` 进行工具调用。
-   372|   455|
-   373|   456|**Q: 可以部署到公网吗？**
-   374|   457|A: 可以，但注意修改默认 API Key（`sk-mimo` 太简单），建议使用 Nginx 反向代理 + HTTPS。
-   375|   458|
-   376|   459|### 为什么选 no-tools
-   377|
-   378|本分支移除了所有工具调用逻辑（`tool_call.py`），**不注入任何工具 prompt**。
-   379|
-   380|效果：
-   381|- 上下文更干净 — 模型注意力 100% 在用户问题上
-   382|- 输出质量更高 — 不会因格式指令"分心"
-   383|- 代码更简洁 — 少一个模块，部署更快
-   384|- 不会幻觉 TOOL_CALL — 模型不会无中生有输出工具调用格式
-   385|
-   386|如果后续需要工具调用，切回 `main` 分支即可。
-   387|
-   388|## 许可
-   389|   460|
-   390|   461|MIT License
-   391|   462|
-   392|   463|---
-   393|   464|
-   394|   465|**致谢：** 小米 MiMo AI Studio 提供的基础 API 服务。
-   395|   466|
+# MiMo2API
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
+
+将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片）、多账号负载均衡。**本分支不含工具调用逻辑，专注纯对话，输出质量更高。**
+
+
+本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
+本项目所修改代码均为ai完成，不含任何一句人工代码，望周知！
+
+> ⚠️ **这是 `no-tools` 分支** — 不支持 Function Calling。如需工具调用，请切换到 [`main` 分支](https://github.com/Fly143/MiMo2API)。
+
+
+## 目录
+
+- [特性](#特性)
+- [架构](#架构)
+- [快速开始](#快速开始)
+  - [一键部署](#一键部署)
+  - [手动安装](#手动安装)
+- [配置凭证](#配置凭证)
+  - [方法1：Cookie 导入](#方法1cookie-导入)
+  - [方法2：cURL 导入](#方法2curl-导入)
+  - [多账号管理](#多账号管理)
+- [API 使用](#api-使用)
+  - [列出模型](#1-列出模型)
+  - [文本对话](#2-文本对话)
+  - [流式对话](#3-流式对话)
+  - [多模态（图片理解）](#4-多模态图片理解)
+  - [深度思考模式](#5-深度思考模式)
+  - [模型发现与刷新](#6-模型发现与刷新)
+- [管理命令](#管理命令)
+- [项目结构](#项目结构)
+- [配置参考](#配置参考)
+- [依赖](#依赖)
+- [限制与已知问题](#限制与已知问题)
+- [常见问题](#常见问题)
+- [为什么选 no-tools](#为什么选-no-tools)
+- [许可](#许可)
+
+## 特性
+
+- **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
+- **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）
+- **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
+- **多账号池** — 管理面板配置多个 MiMo 账号，轮询负载均衡，自动故障转移
+- **动态模型发现** — 启动时从 MiMo 官方 API 实时拉取可用模型列表，无需手动维护
+- **凭证管理** — 支持 Cookie 导入、cURL 导入两种配置方式
+- **CORS 全开** — 允许任意来源跨域访问
+
+## 架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                     OpenAI 兼容客户端                        │
+│            (ChatBox / LobeChat / curl / SDK)              │
+└───────────────┬──────────────────────────────────────────┘
+                │  /v1/chat/completions
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│                     MiMo2API (FastAPI)                      │
+│  ┌─────────┐  ┌──────────────────────┐                   │
+│  │ routes  │  │     mimo_client      │                   │
+│  │ (API)   │──│ (HTTP/SSE 代理)       │                   │
+│  └─────────┘  └──────────────────────┘                   │
+│  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │ config  │  │    utils     │  │      models           │ │
+│  │ (多账号) │  │ (图片上传等)  │  │ (OpenAI 数据模型)     │ │
+│  └─────────┘  └──────────────┘  └──────────────────────┘ │
+└───────────────┬──────────────────────────────────────────┘
+                │  HTTPS (SSE)
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│              MiMo API (aistudio.xiaomimimo.com)           │
+│              /open-apis/bot/chat (SSE)                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+## 快速开始
+
+### 一键部署
+
+```bash
+# 方式一：直接克隆（推荐）
+git clone -b no-tools https://github.com/Fly143/MiMo2API.git
+cd MiMo2API
+chmod +x deploy.sh
+./deploy.sh
+
+# 方式二：解压 tar.gz 包
+tar xzf MiMo2API.tar.gz
+cd MiMo2API
+chmod +x deploy.sh
+./deploy.sh
+```
+
+部署完成后，服务已在 **前台** 启动。见下方[管理命令](#管理命令)了解后台运行等方式。
+
+### 手动安装
+
+```bash
+# 1. 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 创建配置文件
+cp config.example.json config.json
+
+# 4. 启动
+python main.py
+```
+
+启动后访问：**http://localhost:8080**
+
+## 配置凭证
+
+打开管理面板 http://localhost:8080 进行配置。
+
+### 方法1：Cookie 导入
+
+1. 访问 https://aistudio.xiaomimimo.com 并登录
+2. 打开 **开发者工具** → **Application** → **Storage → Cookies**
+3. 找到以下三个关键 Cookie：
+   - `serviceToken` — 服务凭证（最重要）
+   - `userId` — 用户 ID（纯数字）
+   - `xiaomichatbot_ph` — 会话标识
+4. 填入管理面板 → 保存
+
+> **提示：** serviceToken 有效期很短（约 24 小时），过期后需要重新导入。
+
+### 方法2：cURL 导入
+
+1. 登录 aistudio.xiaomimimo.com
+2. 打开**开发者工具** → **Network** 面板
+3. 发送一条消息，找到 `chat` 请求（SSE 类型）
+4. 右键 → **Copy as cURL**
+5. 粘贴到管理面板 → 自动解析并保存
+
+### 多账号管理
+
+支持添加**多个账号**，代理会**自动轮询**使用：
+- 每个请求从账号池取下一个 → 降低单账号限频风险
+- 支持测试连接、删除、替换已有账号
+- 同一个 userId 重复导入会自动更新（不重复添加）
+
+## API 使用
+
+### 1. 列出模型
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer ***
+```
+
+返回模型列表会显示所有 MiMo 官方当前可用的模型。
+
+### 2. 文本对话
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-flash",
+    "messages": [
+      {"role": "user", "content": "你好，请用中文回复"}
+    ]
+  }'
+```
+
+### 3. 流式对话
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-flash",
+    "messages": [
+      {"role": "user", "content": "讲个故事"}
+    ],
+    "stream": true
+  }'
+```
+
+返回标准 SSE 流（`data: ...\n\n`），以 `data: [DONE]\n\n` 结束。
+
+### 4. 多模态（图片理解）
+
+需要选择 **omni/v2.5** 模型。支持两种图片格式：
+
+**URL 方式：**
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-omni",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "这张图片里有什么？"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}}
+      ]
+    }]
+  }'
+```
+
+**Base64 方式：**
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-omni",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "描述这张图片"},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ..."}}
+      ]
+    }]
+  }'
+```
+
+> **原理：** 代理会自动完成三步上传流程：`genUploadInfo` 获取签名 URL → `PUT` 上传原始数据 → `resource/parse` 注册解析，然后将 `multiMedias` 参数传入聊天 API。
+
+   227### 5. 深度思考模式
+
+使用 `reasoning_effort` 参数启用深度思考：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2-pro",
+    "messages": [
+      {"role": "user", "content": "证明根号2是无理数"}
+    ],
+    "reasoning_effort": "high",
+    "stream": true
+  }'
+```
+
+流式响应中会包含 `reasoning` 字段（对应 MiMo 的 `<think>` 块），内容与文本分开输出。
+
+### 6. 模型发现与刷新
+
+模型列表**启动时自动探测**，从 `https://aistudio.xiaomimimo.com/open-apis/bot/config` 实时拉取，无需手动配置。
+
+```bash
+# 强制刷新模型列表
+curl -X POST http://localhost:8080/v1/models/refresh \
+  -H "Authorization: Bearer ***
+```
+
+   308## 管理命令
+
+```bash
+# 前台运行（Ctrl+C 停止）
+./venv/bin/python main.py
+
+# 后台运行
+nohup ./venv/bin/python main.py > mimo.log 2>&1 &
+echo $! > mimo.pid
+
+# 从 PID 文件停止
+kill $(cat mimo.pid)
+
+# 按进程名停止
+pkill -f "python main.py"
+
+# 查看实时日志
+tail -f mimo.log
+
+# 查看进程状态
+ps aux | grep "python main.py"
+
+# 查看端口占用
+lsof -i :8080
+```
+
+**启动后：**
+
+| 地址 | 说明 |
+|------|------|
+| `http://localhost:8080` | Web 管理后台（配置账号） |
+| `http://localhost:8080/v1` | OpenAI 兼容 API 根路径 |
+| `http://localhost:8080/docs` | Swagger API 文档 |
+
+## 项目结构
+
+```
+MiMo2API/
+├── main.py                  # 入口，FastAPI 应用创建 + uvicorn 启动
+├── deploy.sh                # 一键部署脚本（安装依赖、初始化配置）
+├── requirements.txt         # Python 依赖
+├── config.example.json      # 配置文件模板
+├── config.json              # 实际配置（.gitignore，含凭证）
+└── app/
+    ├── __init__.py
+    ├── routes.py            # API 路由（chat/models/管理面板/账号CRUD）
+    ├── models.py            # OpenAI 兼容数据模型（Pydantic）
+    ├── mimo_client.py       # MiMo API 客户端（HTTP SSE 流处理）
+    ├── config.py            # 配置管理（多账号、线程安全、轮询）
+    ├── utils.py             # 工具函数（cURL解析、图片上传、消息构建）
+    └── admin.html           # Web 管理面板（内嵌单文件）
+```
+
+## 配置参考
+
+`config.json` 完整配置项：
+
+```json
+{
+  "api_keys": "sk-mimo,sk-another",
+  "mimo_accounts": [
+    {
+      "service_token": "eyJ...",
+      "user_id": "123456",
+      "xiaomichatbot_ph": "abc123...",
+      "is_valid": true,
+      "login_time": "04-26 17:00",
+      "last_test": "04-26 17:05"
+    }
+  ],
+  "models": []
+}
+```
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `api_keys` | 逗号分隔的 API Key 列表 | `sk-mimo` |
+| `mimo_accounts` | MiMo 账号列表（可多个） | `[]` |
+| `models` | 自定义模型列表（空数组=自动探测） | `[]` |
+
+**环境变量：** `PORT` — 监听端口（默认 `8080`）
+
+## 依赖
+
+- **Python 3.10+**
+- FastAPI 0.115
+- uvicorn 0.32
+- httpx 0.27
+- Pydantic v2
+
+```bash
+pip install -r requirements.txt
+```
+
+## 限制与已知问题
+
+| 限制 | 说明 |
+|------|------|
+| Token 有效期 | serviceToken 约 24 小时过期，过期后需重新登录 |
+| 多模态模型 | 仅 `mimo-v2-omni、mimo-v2.5` 支持图片；自动切换模型会导致请求 model 与响应 model 不一致 |
+| TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
+| 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
+| 不支持 Embeddings | 仅实现 Chat Completions 端点 |
+| 非流式实际走 SSE | MiMo API 只提供 SSE 流，非流式请求会缓冲全部 SSE 后合并返回 |
+
+## 常见问题
+
+**Q: 为什么返回 401 "invalid api key"？**
+A: 检查 `Authorization` header 是否携带了正确的 API Key。默认是 `sk-mimo`，可在 `config.json` 中修改。
+
+**Q: 为什么返回 503 "no mimo account"？**
+A: 管理面板中没有配置账号，或者所有账号都已失效。请登录 http://localhost:8080 添加有效账号。
+
+**Q: 图片上传失败怎么办？**
+A: 可能是 Cookie 过期导致上传签名获取失败。重新导入 Cookie/login 即可。
+
+**Q: tool_call 没有被提取？**
+A: 查看日志确认响应内容。如果 MiMo 没有按预期输出工具调用格式，可能是提示词不够清晰，或者该模型理解力有限。推荐使用 `mimo-v2-pro` 进行工具调用。
+
+**Q: 可以部署到公网吗？**
+A: 可以，但注意修改默认 API Key（`sk-mimo` 太简单），建议使用 Nginx 反向代理 + HTTPS。
+
+### 为什么选 no-tools
+
+本分支移除了所有工具调用逻辑（`tool_call.py`），**不注入任何工具 prompt**。
+
+效果：
+- 上下文更干净 — 模型注意力 100% 在用户问题上
+- 输出质量更高 — 不会因格式指令"分心"
+- 代码更简洁 — 少一个模块，部署更快
+- 不会幻觉 TOOL_CALL — 模型不会无中生有输出工具调用格式
+
+如果后续需要工具调用，切回 `main` 分支即可。
+
+## 许可
+
+MIT License
+
+---
+
+**致谢：** 小米 MiMo AI Studio 提供的基础 API 服务。
