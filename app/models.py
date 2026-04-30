@@ -12,12 +12,6 @@ class OpenAIMessage(BaseModel):
     tool_call_id: Optional[str] = None
 
 
-class OpenAITool(BaseModel):
-    """OpenAI工具定义"""
-    type: str = "function"
-    function: Dict[str, Any]
-
-
 class OpenAIRequest(BaseModel):
     """OpenAI请求"""
     model: str
@@ -26,8 +20,6 @@ class OpenAIRequest(BaseModel):
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     reasoning_effort: Optional[str] = Field(None, description="深度思考等级: low/medium/high")
-    tools: Optional[List[OpenAITool]] = None
-    tool_choice: Optional[Any] = None
 
 
 class OpenAIDelta(BaseModel):

@@ -20,7 +20,6 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo
-from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 
 router = APIRouter()
 
@@ -307,9 +306,6 @@ async def chat_completions(
     if not account:
         raise HTTPException(status_code=503, detail={"error": {"message": "no mimo account"}})
 
-    # 转换 tools 为字典列表
-    tools_dict = [t.dict() if hasattr(t, 'dict') else t for t in request.tools] if request.tools else None
-
     # 提取媒体
     query_text, base64_medias, processed_msgs = extract_medias_from_messages(request.messages)
     effective_model = request.model
@@ -324,8 +320,8 @@ async def chat_completions(
             if media_obj:
                 multi_medias.append(media_obj)
 
-    # 构建查询
-    query = build_query_from_messages(request.messages, tools=tools_dict)
+    # 构建查询（无工具调用）
+    query = build_query_from_messages(request.messages)
 
     thinking = bool(request.reasoning_effort)
     client = MimoClient(account)
@@ -333,7 +329,7 @@ async def chat_completions(
     # 流式响应
     if request.stream:
         return StreamingResponse(
-            _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias),
+            _stream_response(client, query, thinking, effective_model, multi_medias),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -352,33 +348,13 @@ async def chat_completions(
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
-        # 提取工具调用
-        tool_names = []
-        tool_calls = None
-        if tools_dict:
-            tool_names = get_tool_names(tools_dict)
-            result = extract_tool_call(content, tool_names)
-            if result and result[0]:
-                tool_calls = result[0]  # List[Dict]
-                content = result[1] if len(result) > 1 else clean_tool_text(content)
-
-        # 清洗工具名前缀
-        content = _strip_tool_name_prefix(content, tool_names)
-
-        if tool_calls:
-            return _build_response(
-                msg_id, request.model,
-                content=None, tool_calls=tool_calls,
-                finish_reason="tool_calls", usage=usage
-            )
-        else:
-            full_content = content
-            if think_content:
-                full_content = f"{THINK_OPEN}{think_content}{THINK_CLOSE}\n{content}"
-            return _build_response(
-                msg_id, request.model,
-                content=full_content, finish_reason="stop", usage=usage
-            )
+        full_content = content
+        if think_content:
+            full_content = f"{THINK_OPEN}{think_content}{THINK_CLOSE}\n{content}"
+        return _build_response(
+            msg_id, request.model,
+            content=full_content, finish_reason="stop", usage=usage
+        )
 
     except MimoApiError as e:
         raise HTTPException(status_code=e.status_code, detail={"error": {"message": f"MiMo API: {e.response_body[:200]}"}})
@@ -390,186 +366,73 @@ async def chat_completions(
 
 async def _stream_response(
     client: MimoClient, query: str, thinking: bool, model: str,
-    tools: list = None, multi_medias: list = None
+    multi_medias: list = None
 ):
-    """流式响应生成器。
-
-    行为矩阵：
-    | 场景              | reasoning  | content             |
-    | 无 tools          | 流式       | 流式                |
-    | 有 tools+无工具调用 | 流式      | 缓冲后一次性发送     |
-    | 有 tools+有工具调用 | 流式      | 不发（发 tool_calls）|
-
-    修复 v4.1：
-    - 统一使用 full_content 进行工具调用提取（而非 content_buffer）
-    - 捕获 httpx.ReadTimeout
-    - 无工具调用时也清理工具名前缀
-    """
+    """流式响应生成器（无工具调用版）。"""
     msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created_t = int(time.time())
 
     # 初始 role delta
     yield _build_chunk(msg_id, model, created=created_t, role="assistant")
 
-    has_tools = tools is not None
+    buffer = ""
+    in_think = False
 
     try:
-        if has_tools:
-            # ═══════════════════════════════════════════════════
-            # 有工具定义：reasoning 流式，正文也流式（RikkaHub 需要）
-            # 同时缓冲用于工具调用提取
-            # ═══════════════════════════════════════════════════
-            full_content = ""          # 完整原始文本（用于工具调用提取）
-            content_buffer = ""        # 缓冲的正文（用于无工具调用时输出）
-            in_think = False
-            buffer = ""
+        async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            chunk = sse_data.get("content", "")
+            if not chunk:
+                continue
 
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
-                chunk = sse_data.get("content", "")
-                if not chunk:
-                    continue
+            buffer += chunk.replace("\x00", "")
 
-                full_content += chunk
-                buffer += chunk.replace("\x00", "")
-
-                # 处理 think 标签
-                while True:
-                    if not in_think:
-                        idx = buffer.find(THINK_OPEN)
-                        if idx != -1:
-                            safe, keep = _safe_flush(buffer[:idx])
-                            if safe:
-                                content_buffer += safe
-                                # Stream content immediately
-                                clean = _strip_tool_result_blocks(safe)
-                                clean = _strip_citations(clean)
-                                clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
-                                if clean:
-                                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
-                            in_think = True
-                            buffer = buffer[idx + len(THINK_OPEN):]
-                            continue
-
-                        safe, keep = _safe_flush(buffer)
-                        if safe:
-                            content_buffer += safe
-                            # Stream content immediately
-                            clean = _strip_tool_result_blocks(safe)
-                            clean = _strip_citations(clean)
-                            clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
-                            if clean:
-                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
-                        buffer = keep
-                        break
-                    else:
-                        idx = buffer.find(THINK_CLOSE)
-                        if idx != -1:
-                            safe, keep = _safe_flush(buffer[:idx])
-                            if safe:
-                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                            in_think = False
-                            buffer = buffer[idx + len(THINK_CLOSE):]
-                            continue
-
-                        safe, keep = _safe_flush(buffer)
-                        if safe:
-                            yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                        buffer = keep
-                        break
-
-            # 正文留在 buffer 中的追加到 content_buffer
-            if buffer and not in_think:
-                content_buffer += buffer
-
-            # 清理 null 字节
-            full_content = full_content.replace("\x00", "")
-
-            # 清理 TOOL_RESULT 标签
-            full_content = _strip_tool_result_blocks(full_content)
-            full_content = _strip_citations(full_content)
-
-            # 分离 think 块，提取工具调用
-            main_text, think_text = _split_think(full_content)
-            tool_names = get_tool_names(tools)
-            result = extract_tool_call(main_text, tool_names)
-
-            if result and result[0]:
-                tool_calls = result[0] if isinstance(result[0], list) else [result[0]]
-                cleaned_main = result[1] if len(result) > 1 else clean_tool_text(main_text)
-
-                if tool_calls:
-                    streaming_tc = [{**tc, "index": 0} for tc in tool_calls]
-                    yield _build_chunk(msg_id, model, created=created_t,
-                                       tool_calls=streaming_tc, finish_reason="tool_calls")
-                    yield "data: [DONE]\n\n"
-                    return
-
-            # 无工具调用：content 已经流式发送，只发 finish
-            yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
-            yield "data: [DONE]\n\n"
-
-        else:
-            # ═══════════════════════════════════════════════════
-            # 无工具定义：实时流式输出
-            # ═══════════════════════════════════════════════════
-            buffer = ""
-            in_think = False
-
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
-                chunk = sse_data.get("content", "")
-                if not chunk:
-                    continue
-
-                buffer += chunk.replace("\x00", "")
-
-                while True:
-                    if not in_think:
-                        idx = buffer.find(THINK_OPEN)
-                        if idx != -1:
-                            safe, keep = _safe_flush(buffer[:idx])
-                            if safe:
-                                yield _build_chunk(msg_id, model, created=created_t, content=safe)
-                            in_think = True
-                            buffer = buffer[idx + len(THINK_OPEN):]
-                            continue
-
-                        safe, keep = _safe_flush(buffer)
+            while True:
+                if not in_think:
+                    idx = buffer.find(THINK_OPEN)
+                    if idx != -1:
+                        safe, keep = _safe_flush(buffer[:idx])
                         if safe:
                             yield _build_chunk(msg_id, model, created=created_t, content=safe)
-                        buffer = keep
-                        break
-                    else:
-                        idx = buffer.find(THINK_CLOSE)
-                        if idx != -1:
-                            safe, keep = _safe_flush(buffer[:idx])
-                            if safe:
-                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                            in_think = False
-                            buffer = buffer[idx + len(THINK_CLOSE):]
-                            continue
+                        in_think = True
+                        buffer = buffer[idx + len(THINK_OPEN):]
+                        continue
 
-                        safe, keep = _safe_flush(buffer)
+                    safe, keep = _safe_flush(buffer)
+                    if safe:
+                        yield _build_chunk(msg_id, model, created=created_t, content=safe)
+                    buffer = keep
+                    break
+                else:
+                    idx = buffer.find(THINK_CLOSE)
+                    if idx != -1:
+                        safe, keep = _safe_flush(buffer[:idx])
                         if safe:
                             yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                        buffer = keep
-                        break
+                        in_think = False
+                        buffer = buffer[idx + len(THINK_CLOSE):]
+                        continue
 
-            # 发送剩余内容
-            if buffer:
-                clean = _strip_tool_result_blocks(buffer)
-                clean = _strip_citations(clean)
-                clean = _strip_mimo_prefix(clean)
-                if clean:
-                    if in_think:
-                        yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
-                    else:
-                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                    safe, keep = _safe_flush(buffer)
+                    if safe:
+                        yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                    buffer = keep
+                    break
 
-            yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
-            yield "data: [DONE]\n\n"
+        # 发送剩余内容
+        if buffer:
+            clean = _strip_tool_result_blocks(buffer)
+            clean = _strip_citations(clean)
+            clean = _strip_mimo_prefix(clean)
+            if clean:
+                if in_think:
+                    yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
+                else:
+                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
+
+        yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+        yield "data: [DONE]\n\n"
 
     except httpx.ReadTimeout:
-        # 连接读取超时 — 发送优雅结束
         yield _build_chunk(msg_id, model, created=created_t, finish_reason="length")
         yield "data: [DONE]\n\n"
     except MimoApiError as e:
@@ -578,7 +441,8 @@ async def _stream_response(
         yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        # import traceback
+        yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
+        yield "data: [DONE]\n\n"
         # tb = traceback.format_exc()
         # log_path = Path(__file__).parent.parent / "error.log"
         # if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:

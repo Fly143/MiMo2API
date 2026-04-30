@@ -243,15 +243,13 @@ async def upload_media_to_mimo(
 
 def build_query_from_messages(
     messages: list,
-    tools: list = None,
 ) -> str:
     """从消息列表构建查询字符串。
 
-    格式：用户消息在前（明确任务），工具信息在末尾（简短参考）。
+    格式：用户消息在前（明确任务）。
     MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
     系统消息不传给 MiMo（它是 Hermes 自己用的）。
     """
-    from .tool_call import build_tool_prompt
 
     query_parts = []
 
@@ -269,23 +267,9 @@ def build_query_from_messages(
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
-
         if role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
-            clean = clean.strip()
-            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
+            continue
 
         query_parts.append(f"{role}: {content}")
 
-    result = "\n".join(query_parts)
-
-    # 注入工具提示
-    if tools:
-        tool_prompt = build_tool_prompt(tools)
-        if tool_prompt:
-            result += f"\n{tool_prompt}"
-
-    return result
+    return "\n".join(query_parts)
