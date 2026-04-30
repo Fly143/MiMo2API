@@ -88,6 +88,13 @@
 ### 一键部署
 
 ```bash
+# 方式一：直接克隆（推荐）
+git clone https://github.com/Fly143/MiMo2API.git
+cd MiMo2API
+chmod +x deploy.sh
+./deploy.sh
+
+# 方式二：解压 tar.gz 包
 tar xzf MiMo2API.tar.gz
 cd MiMo2API
 chmod +x deploy.sh
