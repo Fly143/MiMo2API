@@ -96,6 +96,8 @@ chmod +x deploy.sh
 
 部署完成后，服务已在 **前台** 启动。见下方[管理命令](#管理命令)了解后台运行等方式。
 
+> 💡 **不需要工具调用？** 克隆 [`no-tools` 分支](https://github.com/Fly143/MiMo2API/tree/no-tools) 即可获得更干净的纯对话版本（无 prompt 注入，输出质量更高）。
+
 ### 手动安装
 
 ```bash
