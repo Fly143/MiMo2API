@@ -94,11 +94,6 @@ cd MiMo2API
 chmod +x deploy.sh
 ./deploy.sh
 
-# 方式二：解压 tar.gz 包
-tar xzf MiMo2API.tar.gz
-cd MiMo2API
-chmod +x deploy.sh
-./deploy.sh
 ```
 
 部署完成后，服务已在 **前台** 启动。见下方[管理命令](#管理命令)了解后台运行等方式。
