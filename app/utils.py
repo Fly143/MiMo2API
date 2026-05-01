@@ -5,7 +5,6 @@
 
 import re
 import hashlib
-import json as _json
 import httpx
 from typing import Optional, List, Tuple, Dict, Any
 from .config import MimoAccount
@@ -101,54 +100,10 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
         else:
             text = str(content) if content else ""
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            text = _serialize_tool_calls(msg.tool_calls)
-
-        if msg.role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
-            text = f"[tool_result id={tool_call_id[:8]}] {clean}"
-
         processed_messages.append({"role": msg.role, "text": text})
 
     query_text = processed_messages[-1]["text"] if processed_messages else ""
     return query_text, base64_medias, text_files, processed_messages
-
-
-def _serialize_tool_calls(tool_calls: list) -> str:
-    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
-    tc_lines = []
-    for tc in tool_calls:
-        fn = _safe_nested_get(tc, "function")
-        if not fn:
-            continue
-        fname = _safe_nested_get(fn, "name", "")
-        args_str = _safe_nested_get(fn, "arguments", "{}")
-
-        try:
-            args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-            if isinstance(args, dict):
-                kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
-            else:
-                kv = str(args)
-        except Exception:
-            kv = str(args_str)
-
-        tc_lines.append(f"TOOL_CALL: {fname}({kv})")
-
-    return "\n".join(tc_lines)
-
-
-def _safe_nested_get(obj, *keys, default=None):
-    """安全嵌套取值 — 兼容 dict 和 pydantic model。"""
-    for key in keys:
-        if obj is None:
-            return default
-        if isinstance(obj, dict):
-            obj = obj.get(key, default)
-        else:
-            obj = getattr(obj, key, default)
-    return obj
 
 
 async def upload_text_file_to_mimo(
@@ -393,9 +348,6 @@ def build_query_from_messages(
                 if isinstance(item, dict) and item.get("type") == "text":
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
-
-        if role == "tool":
-            continue
 
         query_parts.append(f"{role}: {content}")
 

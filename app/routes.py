@@ -144,63 +144,11 @@ async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
 
 # ─── 文本清洗辅助函数 ────────────────────────────────────────
 
-def _strip_tool_result_blocks(text: str) -> str:
-    """移除模型幻觉输出的 TOOL_RESULT 标签。
-
-    模型看到上下文中 [TOOL_RESULT] 格式后学会复述。
-    移除所有已知格式。
-    """
-    if not text:
-        return text
-    cleaned = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\[/TOOL_RESULT\]\s*', '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\[tool_result\s+id=\S+\]\s*', '', cleaned, flags=re.IGNORECASE)
-    return cleaned.strip()
-
-
 def _strip_citations(text: str) -> str:
     """移除 MiMo 模型输出的引用标记，如 (citation:1)(citation:14)。"""
     if not text:
         return text
     return re.sub(r'\(citation:\d+\)\s*', '', text).strip()
-
-
-def _camel_case(name: str) -> str:
-    """snake_case -> camelCase: web_search -> webSearch"""
-    parts = name.split('_')
-    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
-
-
-def _strip_tool_name_prefix(text: str, tool_names: list) -> str:
-    """去掉模型作为独立 SSE 事件输出的工具名（如 'webSearch'）。
-
-    处理 snake_case 和 camelCase 变体，大小写不敏感。
-    """
-    if not text or not tool_names:
-        return text
-    variants = []
-    for n in tool_names:
-        variants.append(re.escape(n))
-        if '_' in n:
-            variants.append(re.escape(_camel_case(n)))
-    escaped = '|'.join(variants)
-    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
-    return cleaned.strip()
-
-
-def _strip_mimo_prefix(text: str) -> str:
-    """通用 MiMo 原生前缀清理（含 IGNORECASE）。
-
-    在 mimo_client 层已过滤 SSE 事件，此处做兜底。
-    """
-    if not text:
-        return text
-    prefixes = ['webSearch', 'getTimeInfo', 'getTime', 'sessionSearch',
-                'imageSearch', 'fileSearch', 'getLocation', 'webExtract',
-                'getWeather', 'calculator']
-    escaped = '|'.join(re.escape(p) for p in prefixes)
-    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
-    return cleaned.strip()
 
 
 # ─── Think 标签处理 ──────────────────────────────────────────
@@ -242,11 +190,11 @@ def _split_think(text: str) -> Tuple[str, str]:
 
 def _build_response(
     msg_id: str, model: str,
-    content: str = None, tool_calls: list = None,
+    content: str = None,
     finish_reason: str = "stop", usage: dict = None
 ) -> OpenAIResponse:
     """统一构建 OpenAI 非流式响应。"""
-    message = OpenAIMessage(role="assistant", content=content, tool_calls=tool_calls)
+    message = OpenAIMessage(role="assistant", content=content)
     usage_obj = None
     if usage:
         usage_obj = OpenAIUsage(
@@ -265,7 +213,7 @@ def _build_response(
 def _build_chunk(
     msg_id: str, model: str,
     content: str = None, reasoning: str = None,
-    tool_calls: list = None, finish_reason: str = None,
+    finish_reason: str = None,
     role: str = None, created: int = None
 ) -> str:
     """统一构建 SSE chunk 字符串。
@@ -276,7 +224,7 @@ def _build_chunk(
     """
     delta = OpenAIDelta(
         role=role, content=content,
-        reasoning=reasoning, tool_calls=tool_calls
+        reasoning=reasoning
     )
     chunk = OpenAIResponse(
         id=msg_id, object="chat.completion.chunk",
@@ -284,7 +232,7 @@ def _build_chunk(
         model=model,
         choices=[OpenAIChoice(index=0, delta=delta, finish_reason=finish_reason)]
     )
-    data = chunk.model_dump(exclude_none=True)
+    data = chunk.dict(exclude_none=True)
     if reasoning:
         for choice in data.get('choices', []):
             d = choice.get('delta', {})
@@ -374,7 +322,6 @@ async def chat_completions(
         content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
 
         # 清理模型输出杂质
-        content = _strip_tool_result_blocks(content)
         content = _strip_citations(content)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -451,9 +398,7 @@ async def _stream_response(
 
         # 发送剩余内容
         if buffer:
-            clean = _strip_tool_result_blocks(buffer)
-            clean = _strip_citations(clean)
-            clean = _strip_mimo_prefix(clean)
+            clean = _strip_citations(buffer)
             if clean:
                 if in_think:
                     yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)

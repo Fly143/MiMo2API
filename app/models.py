@@ -8,8 +8,6 @@ class OpenAIMessage(BaseModel):
     """OpenAI消息"""
     role: str
     content: Optional[Any] = None  # str or List[Dict] for multimodal
-    tool_calls: Optional[List[Dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
 
 
 class OpenAIRequest(BaseModel):
@@ -28,7 +26,6 @@ class OpenAIDelta(BaseModel):
     content: Optional[str] = None
     reasoning: Optional[str] = Field(None, description="深度思考内容 (OpenAI o1 格式)")
     reasoning_content: Optional[str] = Field(None, description="深度思考内容 (DeepSeek 格式)")
-    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 
 class OpenAIChoice(BaseModel):
