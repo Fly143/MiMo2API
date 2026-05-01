@@ -20,7 +20,7 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
-from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
+from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 
 router = APIRouter()
 
@@ -145,11 +145,63 @@ async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
 
 # ─── 文本清洗辅助函数 ────────────────────────────────────────
 
+def _strip_tool_result_blocks(text: str) -> str:
+    """移除模型幻觉输出的 TOOL_RESULT 标签。
+
+    模型看到上下文中 [TOOL_RESULT] 格式后学会复述。
+    移除所有已知格式。
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\[/TOOL_RESULT\]\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\[tool_result\s+id=\S+\]\s*', '', cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _strip_citations(text: str) -> str:
     """移除 MiMo 模型输出的引用标记，如 (citation:1)(citation:14)。"""
     if not text:
         return text
     return re.sub(r'\(citation:\d+\)\s*', '', text).strip()
+
+
+def _camel_case(name: str) -> str:
+    """snake_case -> camelCase: web_search -> webSearch"""
+    parts = name.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
+
+
+def _strip_tool_name_prefix(text: str, tool_names: list) -> str:
+    """去掉模型作为独立 SSE 事件输出的工具名（如 'webSearch'）。
+
+    处理 snake_case 和 camelCase 变体，大小写不敏感。
+    """
+    if not text or not tool_names:
+        return text
+    variants = []
+    for n in tool_names:
+        variants.append(re.escape(n))
+        if '_' in n:
+            variants.append(re.escape(_camel_case(n)))
+    escaped = '|'.join(variants)
+    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def _strip_mimo_prefix(text: str) -> str:
+    """通用 MiMo 原生前缀清理（含 IGNORECASE）。
+
+    在 mimo_client 层已过滤 SSE 事件，此处做兜底。
+    """
+    if not text:
+        return text
+    prefixes = ['webSearch', 'getTimeInfo', 'getTime', 'sessionSearch',
+                'imageSearch', 'fileSearch', 'getLocation', 'webExtract',
+                'getWeather', 'calculator']
+    escaped = '|'.join(re.escape(p) for p in prefixes)
+    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
 
 
 # ─── Think 标签处理 ──────────────────────────────────────────
@@ -191,11 +243,11 @@ def _split_think(text: str) -> Tuple[str, str]:
 
 def _build_response(
     msg_id: str, model: str,
-    content: str = None,
+    content: str = None, tool_calls: list = None,
     finish_reason: str = "stop", usage: dict = None
 ) -> OpenAIResponse:
     """统一构建 OpenAI 非流式响应。"""
-    message = OpenAIMessage(role="assistant", content=content)
+    message = OpenAIMessage(role="assistant", content=content, tool_calls=tool_calls)
     usage_obj = None
     if usage:
         usage_obj = OpenAIUsage(
@@ -214,7 +266,7 @@ def _build_response(
 def _build_chunk(
     msg_id: str, model: str,
     content: str = None, reasoning: str = None,
-    finish_reason: str = None,
+    tool_calls: list = None, finish_reason: str = None,
     role: str = None, created: int = None
 ) -> str:
     """统一构建 SSE chunk 字符串。
@@ -225,7 +277,7 @@ def _build_chunk(
     """
     delta = OpenAIDelta(
         role=role, content=content,
-        reasoning=reasoning
+        reasoning=reasoning, tool_calls=tool_calls
     )
     chunk = OpenAIResponse(
         id=msg_id, object="chat.completion.chunk",
@@ -277,6 +329,9 @@ async def chat_completions(
     if not account:
         raise HTTPException(status_code=503, detail={"error": {"message": "no mimo account"}})
 
+    # 转换 tools 为字典列表
+    tools_dict = [t.dict() if hasattr(t, 'dict') else t for t in request.tools] if request.tools else None
+
     # 提取媒体和文本文件
     query_text, base64_medias, text_files, processed_msgs = extract_medias_from_messages(request.messages)
     effective_model = request.model
@@ -300,8 +355,8 @@ async def chat_completions(
             if media_obj:
                 multi_medias.append(media_obj)
 
-    # 构建查询（无工具调用）
-    query = build_query_from_messages(request.messages)
+    # 构建查询
+    query = build_query_from_messages(request.messages, tools=tools_dict)
 
     thinking = bool(request.reasoning_effort)
     client = MimoClient(account)
@@ -309,7 +364,7 @@ async def chat_completions(
     # 流式响应
     if request.stream:
         return StreamingResponse(
-            _stream_response(client, query, thinking, effective_model, multi_medias),
+            _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -323,21 +378,38 @@ async def chat_completions(
         content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
 
         # 清理模型输出杂质
+        content = _strip_tool_result_blocks(content)
         content = _strip_citations(content)
-
-        # 保存用量
-        if usage:
-            _add_usage(request.model, usage.get("promptTokens", 0), usage.get("completionTokens", 0))
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
-        full_content = content
-        if think_content:
-            full_content = f"{THINK_OPEN}{think_content}{THINK_CLOSE}\n{content}"
-        return _build_response(
-            msg_id, request.model,
-            content=full_content, finish_reason="stop", usage=usage
-        )
+        # 提取工具调用
+        tool_names = []
+        tool_calls = None
+        if tools_dict:
+            tool_names = get_tool_names(tools_dict)
+            result = extract_tool_call(content, tool_names)
+            if result and result[0]:
+                tool_calls = result[0]  # List[Dict]
+                content = result[1] if len(result) > 1 else clean_tool_text(content)
+
+        # 清洗工具名前缀
+        content = _strip_tool_name_prefix(content, tool_names)
+
+        if tool_calls:
+            return _build_response(
+                msg_id, request.model,
+                content=None, tool_calls=tool_calls,
+                finish_reason="tool_calls", usage=usage
+            )
+        else:
+            full_content = content
+            if think_content:
+                full_content = f"{THINK_OPEN}{think_content}{THINK_CLOSE}\n{content}"
+            return _build_response(
+                msg_id, request.model,
+                content=full_content, finish_reason="stop", usage=usage
+            )
 
     except MimoApiError as e:
         raise HTTPException(status_code=e.status_code, detail={"error": {"message": f"MiMo API: {e.response_body[:200]}"}})
@@ -349,82 +421,186 @@ async def chat_completions(
 
 async def _stream_response(
     client: MimoClient, query: str, thinking: bool, model: str,
-    multi_medias: list = None
+    tools: list = None, multi_medias: list = None
 ):
-    """流式响应生成器（无工具调用版）。"""
+    """流式响应生成器。
+
+    行为矩阵：
+    | 场景              | reasoning  | content             |
+    | 无 tools          | 流式       | 流式                |
+    | 有 tools+无工具调用 | 流式      | 缓冲后一次性发送     |
+    | 有 tools+有工具调用 | 流式      | 不发（发 tool_calls）|
+
+    修复 v4.1：
+    - 统一使用 full_content 进行工具调用提取（而非 content_buffer）
+    - 捕获 httpx.ReadTimeout
+    - 无工具调用时也清理工具名前缀
+    """
     msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created_t = int(time.time())
 
     # 初始 role delta
     yield _build_chunk(msg_id, model, created=created_t, role="assistant")
 
-    buffer = ""
-    in_think = False
-    last_usage = None  # 最后一次收到的用量数据
+    has_tools = tools is not None
 
     try:
-        async for sse_data in client.stream_api(query, thinking, model, multi_medias):
-            # 用量事件
-            if sse_data.get("type") == "usage":
-                last_usage = sse_data
-                continue
+        if has_tools:
+            # ═══════════════════════════════════════════════════
+            # 有工具定义：reasoning 流式，正文也流式（RikkaHub 需要）
+            # 同时缓冲用于工具调用提取
+            # ═══════════════════════════════════════════════════
+            full_content = ""          # 完整原始文本（用于工具调用提取）
+            content_buffer = ""        # 缓冲的正文（用于无工具调用时输出）
+            in_think = False
+            buffer = ""
 
-            chunk = sse_data.get("content", "")
-            if not chunk:
-                continue
+            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+                chunk = sse_data.get("content", "")
+                if not chunk:
+                    continue
 
-            buffer += chunk.replace("\x00", "")
+                full_content += chunk
+                buffer += chunk.replace("\x00", "")
 
-            while True:
-                if not in_think:
-                    idx = buffer.find(THINK_OPEN)
-                    if idx != -1:
-                        safe, keep = _safe_flush(buffer[:idx])
+                # 处理 think 标签
+                while True:
+                    if not in_think:
+                        idx = buffer.find(THINK_OPEN)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                content_buffer += safe
+                                # Stream content immediately
+                                clean = _strip_tool_result_blocks(safe)
+                                clean = _strip_citations(clean)
+                                clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
+                                if clean:
+                                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                            in_think = True
+                            buffer = buffer[idx + len(THINK_OPEN):]
+                            continue
+
+                        safe, keep = _safe_flush(buffer)
                         if safe:
-                            yield _build_chunk(msg_id, model, created=created_t, content=safe)
-                        in_think = True
-                        buffer = buffer[idx + len(THINK_OPEN):]
-                        continue
+                            content_buffer += safe
+                            # Stream content immediately
+                            clean = _strip_tool_result_blocks(safe)
+                            clean = _strip_citations(clean)
+                            clean = _strip_tool_name_prefix(clean, get_tool_names(tools))
+                            if clean:
+                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                        buffer = keep
+                        break
+                    else:
+                        idx = buffer.find(THINK_CLOSE)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                            in_think = False
+                            buffer = buffer[idx + len(THINK_CLOSE):]
+                            continue
 
-                    safe, keep = _safe_flush(buffer)
-                    if safe:
-                        yield _build_chunk(msg_id, model, created=created_t, content=safe)
-                    buffer = keep
-                    break
-                else:
-                    idx = buffer.find(THINK_CLOSE)
-                    if idx != -1:
-                        safe, keep = _safe_flush(buffer[:idx])
+                        safe, keep = _safe_flush(buffer)
                         if safe:
                             yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                        in_think = False
-                        buffer = buffer[idx + len(THINK_CLOSE):]
-                        continue
+                        buffer = keep
+                        break
 
-                    safe, keep = _safe_flush(buffer)
-                    if safe:
-                        yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
-                    buffer = keep
-                    break
+            # 正文留在 buffer 中的追加到 content_buffer
+            if buffer and not in_think:
+                content_buffer += buffer
 
-        # 发送剩余内容
-        if buffer:
-            clean = _strip_citations(buffer)
-            if clean:
-                if in_think:
-                    yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
-                else:
-                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
+            # 清理 null 字节
+            full_content = full_content.replace("\x00", "")
 
-        yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            # 清理 TOOL_RESULT 标签
+            full_content = _strip_tool_result_blocks(full_content)
+            full_content = _strip_citations(full_content)
 
-        # 保存流式用量
-        if last_usage:
-            _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+            # 分离 think 块，提取工具调用
+            main_text, think_text = _split_think(full_content)
+            tool_names = get_tool_names(tools)
+            result = extract_tool_call(main_text, tool_names)
 
-        yield "data: [DONE]\n\n"
+            if result and result[0]:
+                tool_calls = result[0] if isinstance(result[0], list) else [result[0]]
+                cleaned_main = result[1] if len(result) > 1 else clean_tool_text(main_text)
+
+                if tool_calls:
+                    streaming_tc = [{**tc, "index": 0} for tc in tool_calls]
+                    yield _build_chunk(msg_id, model, created=created_t,
+                                       tool_calls=streaming_tc, finish_reason="tool_calls")
+                    yield "data: [DONE]\n\n"
+                    return
+
+            # 无工具调用：content 已经流式发送，只发 finish
+            yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            yield "data: [DONE]\n\n"
+
+        else:
+            # ═══════════════════════════════════════════════════
+            # 无工具定义：实时流式输出
+            # ═══════════════════════════════════════════════════
+            buffer = ""
+            in_think = False
+
+            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+                chunk = sse_data.get("content", "")
+                if not chunk:
+                    continue
+
+                buffer += chunk.replace("\x00", "")
+
+                while True:
+                    if not in_think:
+                        idx = buffer.find(THINK_OPEN)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, content=safe)
+                            in_think = True
+                            buffer = buffer[idx + len(THINK_OPEN):]
+                            continue
+
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            yield _build_chunk(msg_id, model, created=created_t, content=safe)
+                        buffer = keep
+                        break
+                    else:
+                        idx = buffer.find(THINK_CLOSE)
+                        if idx != -1:
+                            safe, keep = _safe_flush(buffer[:idx])
+                            if safe:
+                                yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                            in_think = False
+                            buffer = buffer[idx + len(THINK_CLOSE):]
+                            continue
+
+                        safe, keep = _safe_flush(buffer)
+                        if safe:
+                            yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
+                        buffer = keep
+                        break
+
+            # 发送剩余内容
+            if buffer:
+                clean = _strip_tool_result_blocks(buffer)
+                clean = _strip_citations(clean)
+                clean = _strip_mimo_prefix(clean)
+                if clean:
+                    if in_think:
+                        yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
+                    else:
+                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
+
+            yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            yield "data: [DONE]\n\n"
 
     except httpx.ReadTimeout:
+        # 连接读取超时 — 发送优雅结束
         yield _build_chunk(msg_id, model, created=created_t, finish_reason="length")
         yield "data: [DONE]\n\n"
     except MimoApiError as e:
@@ -433,8 +609,7 @@ async def _stream_response(
         yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
-        yield "data: [DONE]\n\n"
+        # import traceback
         # tb = traceback.format_exc()
         # log_path = Path(__file__).parent.parent / "error.log"
         # if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
@@ -635,26 +810,3 @@ async def test_account_endpoint(request: TestAccountRequest):
         return {"success": True, "response": content}
     except Exception as e:
         return {"success": False, "error": str(e)}
-
-
-# ─── 用量统计 API ─────────────────────────────────────────────
-
-@router.get("/api/usage")
-async def usage_stats():
-    """返回用量统计：按模型分组 + 全部汇总。"""
-    return _get_usage()
-
-
-@router.delete("/api/usage")
-async def clear_usage():
-    """清空全部用量统计数据。"""
-    _clear_usage()
-    return {"ok": True}
-
-
-# ─── 模型列表（免鉴权，供管理页面使用） ───────────────────────
-
-@router.get("/api/models")
-async def admin_models():
-    """返回可用模型列表（无鉴权，仅供管理页面动态加载）。"""
-    return {"models": get_models_list()}

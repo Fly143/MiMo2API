@@ -151,29 +151,6 @@
             .btn-group { flex-direction: column; }
             .btn-group button { width: 100%; justify-content: center; }
         }
-
-        /* Usage table */
-        .usage-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-        .usage-tbl th, .usage-tbl td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border); }
-        .usage-tbl th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
-        .usage-tbl td { font-variant-numeric: tabular-nums; }
-        .usage-tbl tr:last-child td { border-bottom: none; }
-        .usage-tbl .model-cell { text-align: left; }
-        .usage-tbl .total-row { font-weight: 600; border-top: 2px solid var(--primary); }
-        .usage-tbl .total-row td { padding-top: 14px; color: #a5b4fc; }
-        .usage-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; }
-        .usage-empty .icon { font-size: 40px; margin-bottom: 10px; }
-
-        /* Period & model filter buttons */
-        .period-btn {
-            padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
-            background: transparent; color: var(--text);
-            font-size: 13px; cursor: pointer; transition: all 0.2s;
-        }
-        .period-btn:hover { background: var(--bg-input); border-color: var(--primary); }
-        .period-btn.active {
-            background: var(--primary); color: #fff; border-color: var(--primary);
-        }
     </style>
 </head>
 <body>
@@ -195,12 +172,11 @@
         </div>
 
         <!-- 标签页：cURL / Cookie / 账号 -->
-        <div class="card" style="padding: 0; overflow: visible;">
+        <div class="card" style="padding: 0; overflow: hidden;">
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('curl')">cURL</div>
                 <div class="tab" onclick="switchTab('cookie')">Cookie</div>
                 <div class="tab" onclick="switchTab('accounts')">账号</div>
-                <div class="tab" onclick="switchTab('usage')">用量统计</div>
             </div>
 
             <div class="tab-content">
@@ -237,18 +213,6 @@
                         <button class="btn-success" onclick="testAll()">测试全部</button>
                     </div>
                 </div>
-
-                <!-- 用量统计 -->
-                <div id="panel-usage" class="tab-panel">
-                    <div id="usageContent"></div>
-                    <div class="btn-group" style="margin-top:14px;flex-wrap:nowrap;flex-direction:row!important">
-                        <button class="period-btn active" data-p="total" onclick="switchPeriod('total')">全部</button>
-                        <button class="period-btn" data-p="week" onclick="switchPeriod('week')">本周</button>
-                        <button class="period-btn" data-p="today" onclick="switchPeriod('today')">今日</button>
-                        <button class="btn-outline" onclick="loadUsage()" style="margin-left:auto">刷新</button>
-                        <button class="btn-danger" onclick="clearUsage()">清空</button>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -270,12 +234,11 @@
         }
         function switchTab(t) {
             document.querySelectorAll('.tab').forEach((el, i) => {
-                el.className = 'tab' + (['curl','cookie','accounts','usage'][i] === t ? ' active' : '');
+                el.className = 'tab' + (['curl','cookie','accounts'][i] === t ? ' active' : '');
             });
             document.querySelectorAll('.tab-panel').forEach(p => p.className = 'tab-panel');
             $id('panel-' + t).className = 'tab-panel active';
             if (t === 'accounts') loadAccounts();
-            if (t === 'usage') loadUsage();
         }
 
         // === 加载配置（仅 API Keys） ===
@@ -459,64 +422,6 @@
                 loadAccounts();
                 loadConfig();
             } catch (e) { toast('删除失败', true); }
-        }
-
-        // === 用量统计 ===
-        let usagePeriod = 'total';
-        function fmt(n) { return n.toLocaleString(); }
-        async function loadUsage() {
-            try {
-                const r = await fetch('/api/usage');
-                const data = await r.json();
-                const period = data[usagePeriod] || data.total || {};
-                const models = period.models || {};
-                const total = period.total || {};
-                let entries = Object.entries(models).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
-
-                if (!entries.length && !total.requests) {
-                    $id('usageContent').innerHTML = '<div class="usage-empty"><div class="icon">📊</div>暂无用量数据</div>';
-                    return;
-                }
-
-                let html = '<table class="usage-tbl"><thead><tr><th class="model-cell">模型</th><th>请求</th><th>输入</th><th>输出</th><th>总计</th></tr></thead><tbody>';
-                for (const [model, m] of entries) {
-                    html += `<tr>
-                        <td class="model-cell">${model}</td>
-                        <td>${fmt(m.requests)}</td>
-                        <td>${fmt(m.prompt_tokens)}</td>
-                        <td>${fmt(m.completion_tokens)}</td>
-                        <td>${fmt(m.total_tokens)}</td>
-                    </tr>`;
-                }
-                if (entries.length) {
-                    html += `<tr class="total-row">
-                        <td class="model-cell">📋 合计</td>
-                        <td>${fmt(total.requests)}</td>
-                        <td>${fmt(total.prompt_tokens)}</td>
-                        <td>${fmt(total.completion_tokens)}</td>
-                        <td>${fmt(total.total_tokens)}</td>
-                    </tr>`;
-                }
-                html += '</tbody></table>';
-                $id('usageContent').innerHTML = html;
-            } catch (e) {
-                $id('usageContent').innerHTML = '<div class="usage-empty">加载失败: ' + e.message + '</div>';
-            }
-        }
-        function switchPeriod(p) {
-            usagePeriod = p;
-            document.querySelectorAll('#panel-usage .period-btn[data-p]').forEach(b => b.className = 'period-btn');
-            document.querySelector('#panel-usage .period-btn[data-p="'+p+'"]').className = 'period-btn active';
-            loadUsage();
-        }
-        async function clearUsage() {
-            if (!confirm('确定清空全部用量数据？此操作不可撤销。')) return;
-            try {
-                const r = await fetch('/api/usage', { method: 'DELETE' });
-                const d = await r.json();
-                if (d.ok) { toast('已清空'); loadUsage(); }
-                else toast('清空失败', true);
-            } catch (e) { toast('清空失败: ' + e.message, true); }
         }
 
         // === 初始化 ===
