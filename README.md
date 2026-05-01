@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
 
-将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片）、多账号负载均衡。**本分支不含工具调用逻辑，专注纯对话，输出质量更高。**
+将**小米 MiMo AI Studio** 网页端对话转换为 **OpenAI 兼容 API**，支持多模态（文本 + 图片 + 文件）、多账号负载均衡。**本分支不含工具调用逻辑，专注纯对话，输出质量更高。**
 
 
 本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
@@ -29,8 +29,9 @@
   - [文本对话](#2-文本对话)
   - [流式对话](#3-流式对话)
   - [多模态（图片理解）](#4-多模态图片理解)
-  - [深度思考模式](#5-深度思考模式)
-  - [模型发现与刷新](#6-模型发现与刷新)
+  - [文件上传](#5-文件上传文本文件)
+  - [深度思考模式](#6-深度思考模式)
+  - [模型发现与刷新](#7-模型发现与刷新)
 - [管理命令](#管理命令)
 - [项目结构](#项目结构)
 - [配置参考](#配置参考)
@@ -43,7 +44,7 @@
 ## 特性
 
 - **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
-- **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）
+- **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）；所有模型支持文本文件上传（.md / .txt 等），同样走 MiMo 原生上传流程
 - **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
 - **多账号池** — 管理面板配置多个 MiMo 账号，轮询负载均衡，自动故障转移
 - **动态模型发现** — 启动时从 MiMo 官方 API 实时拉取可用模型列表，无需手动维护
@@ -225,7 +226,32 @@ curl http://localhost:8080/v1/chat/completions \
 
 > **原理：** 代理会自动完成三步上传流程：`genUploadInfo` 获取签名 URL → `PUT` 上传原始数据 → `resource/parse` 注册解析，然后将 `multiMedias` 参数传入聊天 API。
 
-   227### 5. 深度思考模式
+### 5. 文件上传（文本文件）
+
+支持上传文本文件（`.md`、`.txt` 等），MiMo 会读取文件内容并基于内容回答：
+
+```bash
+# 先读取文件并转为 base64
+BASE64=$(base64 -w0 yourfile.md)
+
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer *** \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"mimo-v2-pro\",
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"text\", \"text\": \"总结这个文件\"},
+        {\"type\": \"file\", \"file\": {\"filename\": \"yourfile.md\", \"file_data\": \"$BASE64\"}}
+      ]
+    }]
+  }"
+```
+
+> **支持的格式：** `.txt`、`.md`、`.py`、`.json`、`.yaml` 等纯文本文件。文件走 MiMo 原生上传流程（`mediaType: "file"`），MiMo 按 token 预算自动读取可用部分。
+
+### 6. 深度思考模式
 
 使用 `reasoning_effort` 参数启用深度思考：
 
@@ -245,7 +271,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 流式响应中会包含 `reasoning` 字段（对应 MiMo 的 `<think>` 块），内容与文本分开输出。
 
-### 6. 模型发现与刷新
+### 7. 模型发现与刷新
 
 模型列表**启动时自动探测**，从 `https://aistudio.xiaomimimo.com/open-apis/bot/config` 实时拉取，无需手动配置。
 
@@ -343,7 +369,7 @@ MiMo2API/
 - FastAPI 0.115
 - uvicorn 0.32
 - httpx 0.27
-- Pydantic v2
+- Pydantic v1
 
 ```bash
 pip install -r requirements.txt
