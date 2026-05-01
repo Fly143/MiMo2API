@@ -5,7 +5,6 @@
 
 import re
 import hashlib
-import json as _json
 import httpx
 from typing import Optional, List, Tuple, Dict, Any
 from .config import MimoAccount
@@ -101,54 +100,115 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
         else:
             text = str(content) if content else ""
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            text = _serialize_tool_calls(msg.tool_calls)
-
-        if msg.role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
-            text = f"[tool_result id={tool_call_id[:8]}] {clean}"
-
         processed_messages.append({"role": msg.role, "text": text})
 
     query_text = processed_messages[-1]["text"] if processed_messages else ""
     return query_text, base64_medias, text_files, processed_messages
 
 
-def _serialize_tool_calls(tool_calls: list) -> str:
-    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
-    tc_lines = []
-    for tc in tool_calls:
-        fn = _safe_nested_get(tc, "function")
-        if not fn:
-            continue
-        fname = _safe_nested_get(fn, "name", "")
-        args_str = _safe_nested_get(fn, "arguments", "{}")
+async def upload_text_file_to_mimo(
+    base64_data: str,
+    filename: str,
+    mime_type: str,
+    account: MimoAccount,
+    model: str = "mimo-v2-pro"
+) -> Optional[Dict[str, Any]]:
+    """上传文本文件到小米Mimo服务器。
 
+    三步流程：genUploadInfo -> PUT 上传 -> resource/parse
+    返回 multiMedias 格式的 dict，可直接传给 MiMo chat API。
+    """
+    if "," in base64_data:
+        base64_data = base64_data.split(",", 1)[1]
+
+    import base64 as b64
+    binary_data = b64.b64decode(base64_data)
+
+    md5 = hashlib.md5(binary_data).hexdigest()
+
+    cookie = f"serviceToken={account.service_token}; userId={account.user_id}; xiaomichatbot_ph={account.xiaomichatbot_ph}"
+    headers = {
+        "Cookie": cookie,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://aistudio.xiaomimimo.com/",
+        "Origin": "https://aistudio.xiaomimimo.com"
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
         try:
-            args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-            if isinstance(args, dict):
-                kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
-            else:
-                kv = str(args)
-        except Exception:
-            kv = str(args_str)
+            ph = account.xiaomichatbot_ph
+            info_res = await client.post(
+                f"https://aistudio.xiaomimimo.com/open-apis/resource/genUploadInfo?xiaomichatbot_ph={ph}",
+                json={"fileName": filename, "fileContentMd5": md5},
+                headers=headers
+            )
+            info_data = info_res.json()
+            if info_data.get("code") != 0 or not info_data.get("data"):
+                print(f"[uploadTextFile] genUploadInfo failed: {info_data}")
+                return None
 
-        tc_lines.append(f"TOOL_CALL: {fname}({kv})")
+            upload_url = info_data["data"]["uploadUrl"]
+            resource_url = info_data["data"]["resourceUrl"]
+            object_name = info_data["data"]["objectName"]
 
-    return "\n".join(tc_lines)
+            put_headers = {"Content-Type": "application/octet-stream", "content-md5": md5}
+            put_res = await client.put(upload_url, content=binary_data, headers=put_headers)
+            if put_res.status_code != 200:
+                print(f"[uploadTextFile] PUT failed: {put_res.status_code}")
+                return None
 
+            from urllib.parse import quote
 
-def _safe_nested_get(obj, *keys, default=None):
-    """安全嵌套取值 — 兼容 dict 和 pydantic model。"""
-    for key in keys:
-        if obj is None:
-            return default
-        if isinstance(obj, dict):
-            obj = obj.get(key, default)
-        else:
-            obj = getattr(obj, key, default)
-    return obj
+            parse_url = (
+                f"https://aistudio.xiaomimimo.com/open-apis/resource/parse"
+                f"?fileUrl={quote(resource_url, safe='')}"
+                f"&objectName={quote(object_name, safe='')}"
+                f"&model={model}"
+                f"&xiaomichatbot_ph={ph}"
+            )
+
+            parse_res = None
+            for attempt in range(5):
+                try:
+                    resp = await client.post(parse_url, json={}, headers={
+                        "Cookie": cookie,
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                        "Referer": "https://aistudio.xiaomimimo.com/",
+                        "Origin": "https://aistudio.xiaomimimo.com"
+                    })
+                    data = resp.json()
+                    if data.get("code") == 0 and data.get("data", {}).get("id"):
+                        parse_res = data
+                        import asyncio
+                        await asyncio.sleep(3)
+                        break
+                except Exception:
+                    pass
+                import asyncio
+                await asyncio.sleep(2)
+
+            if not parse_res:
+                print("[uploadTextFile] Parse failed after retries")
+                return None
+
+            resource_id = parse_res["data"]["id"]
+            return {
+                "mediaType": "file",
+                "fileUrl": resource_url,
+                "compressedVideoUrl": "",
+                "audioTrackUrl": "",
+                "name": filename,
+                "size": len(binary_data),
+                "status": "completed",
+                "objectName": object_name,
+                "tokenUsage": parse_res["data"].get("tokenUsage", 0),
+                "url": resource_id
+            }
+
+        except Exception as e:
+            print(f"[uploadTextFile] Error: {e}")
+            return None
 
 
 async def upload_text_file_to_mimo(
@@ -370,15 +430,13 @@ async def upload_media_to_mimo(
 
 def build_query_from_messages(
     messages: list,
-    tools: list = None,
 ) -> str:
     """从消息列表构建查询字符串。
 
-    格式：用户消息在前（明确任务），工具信息在末尾（简短参考）。
+    格式：用户消息在前（明确任务）。
     MiMo API 没有 system/user 角色分离，query 是纯文本拼接。
     系统消息不传给 MiMo（它是 Hermes 自己用的）。
     """
-    from .tool_call import build_tool_prompt
 
     query_parts = []
 
@@ -396,23 +454,6 @@ def build_query_from_messages(
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
-
-        if role == "tool":
-            tool_call_id = getattr(msg, 'tool_call_id', '')
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
-            clean = clean.strip()
-            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
-
         query_parts.append(f"{role}: {content}")
 
-    result = "\n".join(query_parts)
-
-    # 注入工具提示
-    if tools:
-        tool_prompt = build_tool_prompt(tools)
-        if tool_prompt:
-            result += f"\n{tool_prompt}"
-
-    return result
+    return "\n".join(query_parts)
