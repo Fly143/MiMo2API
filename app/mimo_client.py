@@ -172,9 +172,13 @@ class MimoClient:
                         if content_val in self._MIMO_SSE_PREFIXES:
                             continue  # 跳过 MiMo 原生的工具名 SSE 事件
 
-                    # 只 yield text 类型且有内容的事件
+                    # 只 yield text 类型和 usage 事件
                     if sse_data.get("type") == "text" and sse_data.get("content"):
                         yield sse_data
+                    elif "promptTokens" in sse_data:
+                        yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
+                               "completionTokens": sse_data.get("completionTokens", 0),
+                               "totalTokens": sse_data.get("totalTokens", 0)}
 
     @staticmethod
     def _parse_think_tags(text: str) -> Tuple[str, str]:

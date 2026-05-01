@@ -21,6 +21,7 @@ from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
+from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
 
 router = APIRouter()
 
@@ -377,6 +378,10 @@ async def chat_completions(
     try:
         content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
 
+        # 保存用量
+        if usage:
+            _add_usage(request.model, usage.get("promptTokens", 0), usage.get("completionTokens", 0))
+
         # 清理模型输出杂质
         content = _strip_tool_result_blocks(content)
         content = _strip_citations(content)
@@ -454,8 +459,13 @@ async def _stream_response(
             content_buffer = ""        # 缓冲的正文（用于无工具调用时输出）
             in_think = False
             buffer = ""
+            last_usage = None
 
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+                # 用量事件
+                if sse_data.get("type") == "usage":
+                    last_usage = sse_data
+                    continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
                     continue
@@ -533,11 +543,15 @@ async def _stream_response(
                     yield _build_chunk(msg_id, model, created=created_t,
                                        tool_calls=streaming_tc, finish_reason="tool_calls")
                     yield "data: [DONE]\n\n"
+                    if last_usage:
+                        _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
                     return
 
             # 无工具调用：content 已经流式发送，只发 finish
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
+            if last_usage:
+                _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
 
         else:
             # ═══════════════════════════════════════════════════
@@ -545,8 +559,12 @@ async def _stream_response(
             # ═══════════════════════════════════════════════════
             buffer = ""
             in_think = False
+            last_usage = None
 
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+                if sse_data.get("type") == "usage":
+                    last_usage = sse_data
+                    continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
                     continue
@@ -598,6 +616,8 @@ async def _stream_response(
 
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
+            if last_usage:
+                _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
 
     except httpx.ReadTimeout:
         # 连接读取超时 — 发送优雅结束
@@ -810,3 +830,26 @@ async def test_account_endpoint(request: TestAccountRequest):
         return {"success": True, "response": content}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ─── 用量统计 API ─────────────────────────────────────────────
+
+@router.get("/api/usage")
+async def usage_stats():
+    """返回用量统计：按模型分组 + 全部汇总。"""
+    return _get_usage()
+
+
+@router.delete("/api/usage")
+async def clear_usage():
+    """清空全部用量统计数据。"""
+    _clear_usage()
+    return {"ok": True}
+
+
+# ─── 模型列表（免鉴权，供管理页面使用） ───────────────────────
+
+@router.get("/api/models")
+async def admin_models():
+    """返回可用模型列表（无鉴权，仅供管理页面动态加载）。"""
+    return {"models": get_models_list()}
