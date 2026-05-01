@@ -285,7 +285,7 @@ def _build_chunk(
         model=model,
         choices=[OpenAIChoice(index=0, delta=delta, finish_reason=finish_reason)]
     )
-    data = chunk.model_dump(exclude_none=True)
+    data = chunk.dict(exclude_none=True)
     if reasoning:
         for choice in data.get('choices', []):
             d = choice.get('delta', {})
