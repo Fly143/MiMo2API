@@ -30,6 +30,10 @@ THINK_CLOSE = "</think>"
 
 MODELS_CONFIG_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/config"
 
+# MiMo V2 全系列上下文窗口 = 128K tokens
+# 网页端实测：三体全集 (925K字) 可读取约 10.95% ≈ 100K 字
+MIMO_CONTEXT = 131072
+
 _models_cache = None
 _models_lock = asyncio.Lock()
 
@@ -95,7 +99,14 @@ async def list_models(authorization: Optional[str] = Header(None)):
     models = get_models_list()
     return {
         "object": "list",
-        "data": [{"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"} for m in models]
+        "data": [
+            {
+                "id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
+                "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
+                "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
+            }
+            for m in models
+        ]
     }
 
 
@@ -106,7 +117,14 @@ async def refresh_models(authorization: Optional[str] = Header(None)):
     models = await discover_models()
     return {
         "object": "list",
-        "data": [{"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"} for m in models]
+        "data": [
+            {
+                "id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
+                "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
+                "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
+            }
+            for m in models
+        ]
     }
 
 
@@ -116,7 +134,11 @@ async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = get_models_list()
     if model_id in models:
-        return {"id": model_id, "object": "model", "created": 1681940951, "owned_by": "xiaomi"}
+        return {
+            "id": model_id, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
+            "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
+            "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
+        }
     raise HTTPException(status_code=404, detail={"error": {"message": f"Model {model_id} not found"}})
 
 
