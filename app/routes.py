@@ -20,6 +20,7 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
 
 router = APIRouter()
 
@@ -324,6 +325,10 @@ async def chat_completions(
         # 清理模型输出杂质
         content = _strip_citations(content)
 
+        # 保存用量
+        if usage:
+            _add_usage(request.model, usage.get("promptTokens", 0), usage.get("completionTokens", 0))
+
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
         full_content = content
@@ -355,9 +360,15 @@ async def _stream_response(
 
     buffer = ""
     in_think = False
+    last_usage = None  # 最后一次收到的用量数据
 
     try:
         async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            # 用量事件
+            if sse_data.get("type") == "usage":
+                last_usage = sse_data
+                continue
+
             chunk = sse_data.get("content", "")
             if not chunk:
                 continue
@@ -406,6 +417,11 @@ async def _stream_response(
                     yield _build_chunk(msg_id, model, created=created_t, content=clean)
 
         yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+
+        # 保存流式用量
+        if last_usage:
+            _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+
         yield "data: [DONE]\n\n"
 
     except httpx.ReadTimeout:
@@ -619,3 +635,26 @@ async def test_account_endpoint(request: TestAccountRequest):
         return {"success": True, "response": content}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ─── 用量统计 API ─────────────────────────────────────────────
+
+@router.get("/api/usage")
+async def usage_stats():
+    """返回用量统计：按模型分组 + 全部汇总。"""
+    return _get_usage()
+
+
+@router.delete("/api/usage")
+async def clear_usage():
+    """清空全部用量统计数据。"""
+    _clear_usage()
+    return {"ok": True}
+
+
+# ─── 模型列表（免鉴权，供管理页面使用） ───────────────────────
+
+@router.get("/api/models")
+async def admin_models():
+    """返回可用模型列表（无鉴权，仅供管理页面动态加载）。"""
+    return {"models": get_models_list()}
