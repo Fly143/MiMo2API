@@ -49,7 +49,7 @@ class MimoClient:
             "xiaomichatbot_ph": self.account.xiaomichatbot_ph,
         }
 
-    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2-pro", multi_medias: list = None) -> dict:
+    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None) -> dict:
         """创建请求体"""
         return {
             "msgId": uuid.uuid4().hex[:32],
@@ -62,17 +62,18 @@ class MimoClient:
                 "webSearchStatus": "disabled",
                 "model": model
             },
-            "multiMedias": multi_medias or []
+            "multiMedias": multi_medias or [],
+            "attachments": attachments or []
         }
 
-    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None) -> Tuple[str, str, dict]:
+    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None) -> Tuple[str, str, dict]:
         """
         调用Mimo API（非流式）
 
         Returns:
             (content, think_content, usage)
         """
-        body = self._create_request_body(query, thinking, model, multi_medias)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments)
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             response = await client.post(
@@ -118,14 +119,14 @@ class MimoClient:
 
             return content, think_content, usage
 
-    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None) -> AsyncIterator[dict]:
+    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2-pro", multi_medias: list = None, attachments: list = None) -> AsyncIterator[dict]:
         """
         调用Mimo API（流式）
 
         Yields:
             SSE数据字典（仅 type=text 且有 content 的，已过滤 MiMo 原生前缀）
         """
-        body = self._create_request_body(query, thinking, model, multi_medias)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments)
 
         chunk_count = 0
 

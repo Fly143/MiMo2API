@@ -49,9 +49,15 @@ def parse_curl(curl_command: str) -> Optional[MimoAccount]:
     return MimoAccount(**account)
 
 
-def extract_medias_from_messages(messages: list) -> Tuple[str, list, list]:
-    """从消息列表中提取图片/视频/音频媒体。"""
+def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]:
+    """从消息列表中提取图片/视频/音频媒体和文本文件。
+
+    Returns:
+        (query_text, base64_medias, text_files, processed_messages)
+        text_files: [{"base64": ..., "filename": ..., "mimeType": ...}, ...]
+    """
     base64_medias = []
+    text_files = []
     seen_base64 = set()
     processed_messages = []
 
@@ -78,6 +84,20 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list]:
                                 "type": "image"
                             })
                             seen_base64.add(base64)
+                elif item.get("type") == "file":
+                    # 文本文件：收集 base64 用于 MiMo 上传（mediaType="file"）
+                    file_obj = item.get("file", {})
+                    if isinstance(file_obj, dict):
+                        filename = file_obj.get("filename", "file.txt")
+                        file_data = file_obj.get("file_data", "") or file_obj.get("data", "")
+                        if file_data and file_data not in seen_base64:
+                            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
+                            text_files.append({
+                                "base64": file_data,
+                                "filename": filename,
+                                "mimeType": "text/plain"
+                            })
+                            seen_base64.add(file_data)
         else:
             text = str(content) if content else ""
 
@@ -92,7 +112,7 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list]:
         processed_messages.append({"role": msg.role, "text": text})
 
     query_text = processed_messages[-1]["text"] if processed_messages else ""
-    return query_text, base64_medias, processed_messages
+    return query_text, base64_medias, text_files, processed_messages
 
 
 def _serialize_tool_calls(tool_calls: list) -> str:
@@ -129,6 +149,111 @@ def _safe_nested_get(obj, *keys, default=None):
         else:
             obj = getattr(obj, key, default)
     return obj
+
+
+async def upload_text_file_to_mimo(
+    base64_data: str,
+    filename: str,
+    mime_type: str,
+    account: MimoAccount,
+    model: str = "mimo-v2-pro"
+) -> Optional[Dict[str, Any]]:
+    """上传文本文件到小米Mimo服务器。
+
+    三步流程：genUploadInfo -> PUT 上传 -> resource/parse
+    返回 multiMedias 格式的 dict，可直接传给 MiMo chat API。
+    """
+    if "," in base64_data:
+        base64_data = base64_data.split(",", 1)[1]
+
+    import base64 as b64
+    binary_data = b64.b64decode(base64_data)
+
+    md5 = hashlib.md5(binary_data).hexdigest()
+
+    cookie = f"serviceToken={account.service_token}; userId={account.user_id}; xiaomichatbot_ph={account.xiaomichatbot_ph}"
+    headers = {
+        "Cookie": cookie,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://aistudio.xiaomimimo.com/",
+        "Origin": "https://aistudio.xiaomimimo.com"
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        try:
+            ph = account.xiaomichatbot_ph
+            info_res = await client.post(
+                f"https://aistudio.xiaomimimo.com/open-apis/resource/genUploadInfo?xiaomichatbot_ph={ph}",
+                json={"fileName": filename, "fileContentMd5": md5},
+                headers=headers
+            )
+            info_data = info_res.json()
+            if info_data.get("code") != 0 or not info_data.get("data"):
+                print(f"[uploadTextFile] genUploadInfo failed: {info_data}")
+                return None
+
+            upload_url = info_data["data"]["uploadUrl"]
+            resource_url = info_data["data"]["resourceUrl"]
+            object_name = info_data["data"]["objectName"]
+
+            put_headers = {"Content-Type": "application/octet-stream", "content-md5": md5}
+            put_res = await client.put(upload_url, content=binary_data, headers=put_headers)
+            if put_res.status_code != 200:
+                print(f"[uploadTextFile] PUT failed: {put_res.status_code}")
+                return None
+
+            from urllib.parse import quote
+
+            parse_url = (
+                f"https://aistudio.xiaomimimo.com/open-apis/resource/parse"
+                f"?fileUrl={quote(resource_url, safe='')}"
+                f"&objectName={quote(object_name, safe='')}"
+                f"&model={model}"
+                f"&xiaomichatbot_ph={ph}"
+            )
+
+            parse_res = None
+            for attempt in range(5):
+                try:
+                    resp = await client.post(parse_url, json={}, headers={
+                        "Cookie": cookie,
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                        "Referer": "https://aistudio.xiaomimimo.com/",
+                        "Origin": "https://aistudio.xiaomimimo.com"
+                    })
+                    data = resp.json()
+                    if data.get("code") == 0 and data.get("data", {}).get("id"):
+                        parse_res = data
+                        import asyncio
+                        await asyncio.sleep(3)
+                        break
+                except Exception:
+                    pass
+                import asyncio
+                await asyncio.sleep(2)
+
+            if not parse_res:
+                print("[uploadTextFile] Parse failed after retries")
+                return None
+
+            resource_id = parse_res["data"]["id"]
+            return {
+                "mediaType": "file",
+                "fileUrl": resource_url,
+                "compressedVideoUrl": "",
+                "audioTrackUrl": "",
+                "name": filename,
+                "size": len(binary_data),
+                "status": "completed",
+                "objectName": object_name,
+                "tokenUsage": parse_res["data"].get("tokenUsage", 0),
+                "url": resource_id
+            }
+
+        except Exception as e:
+            print(f"[uploadTextFile] Error: {e}")
+            return None
 
 
 async def upload_media_to_mimo(
@@ -186,10 +311,12 @@ async def upload_media_to_mimo(
                 print(f"[uploadMedia] PUT failed: {put_res.status_code}")
                 return None
 
+            from urllib.parse import quote
+
             parse_url = (
                 f"https://aistudio.xiaomimimo.com/open-apis/resource/parse"
-                f"?fileUrl={resource_url}"
-                f"&objectName={object_name}"
+                f"?fileUrl={quote(resource_url, safe='')}"
+                f"&objectName={quote(object_name, safe='')}"
                 f"&model={model}"
                 f"&xiaomichatbot_ph={ph}"
             )
