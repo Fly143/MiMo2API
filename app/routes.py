@@ -19,7 +19,7 @@ from .models import (
 )
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
-from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo
+from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 
 router = APIRouter()
@@ -332,8 +332,8 @@ async def chat_completions(
     # 转换 tools 为字典列表
     tools_dict = [t.dict() if hasattr(t, 'dict') else t for t in request.tools] if request.tools else None
 
-    # 提取媒体
-    query_text, base64_medias, processed_msgs = extract_medias_from_messages(request.messages)
+    # 提取媒体和文本文件
+    query_text, base64_medias, text_files, processed_msgs = extract_medias_from_messages(request.messages)
     effective_model = request.model
 
     multi_medias = []
@@ -342,6 +342,15 @@ async def chat_completions(
         for media in base64_medias:
             media_obj = await upload_media_to_mimo(
                 media["base64"], media["mimeType"], account, effective_model
+            )
+            if media_obj:
+                multi_medias.append(media_obj)
+
+    # 上传文本文件到 MiMo（同样走 multiMedias，mediaType="file"）
+    if text_files:
+        for tf in text_files:
+            media_obj = await upload_text_file_to_mimo(
+                tf["base64"], tf["filename"], tf["mimeType"], account, effective_model
             )
             if media_obj:
                 multi_medias.append(media_obj)
