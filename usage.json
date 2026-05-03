@@ -1,0 +1,26 @@
+{
+  "models": {
+    "mimo-v2.5-tts": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "requests": 2
+    }
+  },
+  "total": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "requests": 2
+  },
+  "daily": {
+    "2026-05-03": {
+      "mimo-v2.5-tts": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "requests": 2
+      }
+    }
+  }
+}

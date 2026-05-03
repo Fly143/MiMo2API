@@ -303,11 +303,34 @@ curl http://localhost:8080/v1/audio/speech \
 ```
 
 支持的语气/音色控制：
-- **内置音色：** `冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`、`mimo_default`
+- **内置音色：** `冰糖`（中文女声）、`茉莉`（中文女声）、`苏打`（中文男声）、`白桦`（中文男声）、`Mia`（英文女声）、`Chloe`（英文女声）、`Milo`（英文男声）、`Dean`（英文男声）、`mimo_default`（默认）
 - **OpenAI 兼容名：** `alloy`/`echo`/`fable`/`onyx`/`nova`/`shimmer` 均映射到 `冰糖`
 - **语速控制：** `speed` 参数（0.5~2.0）
-- **标签控制：** 在 `input` 文本中直接插入 `(河南话)`、`(四川话)`、`[微笑]`、`[生气]` 等标签
+- **唱歌模式：** 使用 `mimo-v2.5-tts` 模型，input 文本以 `(唱歌)` 开头即可
+- **风格标签控制：** 在 `input` 文本开头插入 `(风格)` 标签指定发音风格
+
+| 标签类型 | 示例 |
+|---------|------|
+| 基础情绪 | `(开心)` `(悲伤)` `(愤怒)` `(温柔)` `(平静)` `(冷漠)` |
+| 复合情绪 | `(怅然)` `(欣慰)` `(无奈)` `(愧疚)` `(释然)` `(动情)` |
+| 整体语调 | `(高冷)` `(活泼)` `(严肃)` `(慵懒)` `(俏皮)` `(深沉)` |
+| 音色定位 | `(磁性)` `(醇厚)` `(清亮)` `(空灵)` `(甜美)` `(沙哑)` |
+| 人设腔调 | `(夹子音)` `(御姐音)` `(正太音)` `(大叔音)` `(台湾腔)` |
+| 方言 | `(东北话)` `(四川话)` `(河南话)` `(粤语)` |
+| 角色扮演 | `(孙悟空)` `(林黛玉)` |
+| 唱歌 | `(唱歌)` |
+
+- **细粒度音频标签：** 在文本任意位置插入 `[标签]` 控制局部效果
+
+| 标签 | 示例效果 |
+|------|---------|
+| 语速与节奏 | `[吸气]` `[深呼吸]` `[叹气]` `[喘息]` `[屏息]` |
+| 情绪状态 | `[紧张]` `[激动]` `[疲惫]` `[委屈]` `[撒娇]` `[震惊]` |
+| 语音特征 | `[颤抖]` `[变调]` `[破音]` `[鼻音]` `[气声]` `[沙哑]` |
+| 哭笑表达 | `[笑]` `[轻笑]` `[冷笑]` `[抽泣]` `[呜咽]` `[哽咽]` |
+
 - **自然语言风格：** `style` 参数，如 `轻声细语`、`激昂慷慨`
+- **导演模式：** 支持 `角色/场景/指导` 三维度描述，适合角色配音
 
 #### 8.2 音色设计（自定义音色）
 
@@ -346,7 +369,30 @@ curl http://localhost:8080/v1/audio/speech \
 
 > **原理：** 自动将音频上传到小米 FDS 文件服务，然后以 FDS URL 作为音色参考提交 TTS 任务。
 
-#### 8.4 客户端配置
+#### 8.4 通过 /v1/chat/completions 调用 TTS（兼容官方格式）
+
+TTS 也可以通过标准 OpenAI 聊天接口调用，完全兼容官方 API 格式：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts",
+    "messages": [
+      {"role": "user", "content": "轻快上扬的语调"},
+      {"role": "assistant", "content": "今天天气真不错"}
+    ],
+    "audio": {
+      "format": "wav",
+      "voice": "冰糖"
+    }
+  }'
+```
+
+返回 OpenAI chat.completion 格式，音频以 base64 编码在 `choices[0].message.audio.data` 中。
+
+#### 8.5 客户端配置
 
 **ChatBox / NextChat / LobeChat：**
 - 在 TTS 配置中选择 `/v1/audio/speech` 端点（默认 OpenAI 标准路径即可）
@@ -354,7 +400,7 @@ curl http://localhost:8080/v1/audio/speech \
 
 **RikkaHub：** 直接在聊天中使用标签控制发音（`(河南话)今天可冷`），无需额外配置。
 
-> **📖 参考官方文档：** [小米 MiMo 语音合成 API](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis) / [v2.5 版 TTS](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis-v2.5) — 包含支持的音色列表、标签控制规则、SSML 等详细信息。
+> **📖 参考官方文档：** [小米 MiMo 语音合成 API](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis) / [v2.5 版 TTS](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis-v2.5) — 完整音色列表、SSML 标签规则、导演模式编写指南。
 
 ## 管理命令
 
