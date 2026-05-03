@@ -379,8 +379,8 @@ pip install -r requirements.txt
 
 | 限制 | 说明 |
 |------|------|
-| Token 有效期 | serviceToken 约 24 小时过期，过期后需重新登录 |
-| 多模态模型 | 仅 `mimo-v2-omni、mimo-v2.5` 支持图片；自动切换模型会导致请求 model 与响应 model 不一致 |
+| Token 有效期 | serviceToken 约 24 小时过期，过期后需网页端退出并重新登录（仅刷新 Cookie 无效），见下方 FAQ |
+| 多模态模型 | `mimo-v2.5` / `mimo-v2.5-pro` / `mimo-v2-omni` 支持图片；所有 V2 模型支持文件上传 |
 | TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
 | 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
 | 不支持 Embeddings | 仅实现 Chat Completions 端点 |
@@ -394,8 +394,13 @@ A: 检查 `Authorization` header 是否携带了正确的 API Key。默认是 `s
 **Q: 为什么返回 503 "no mimo account"？**
 A: 管理面板中没有配置账号，或者所有账号都已失效。请登录 http://localhost:8080 添加有效账号。
 
-**Q: 图片上传失败怎么办？**
-A: 可能是 Cookie 过期导致上传签名获取失败。重新导入 Cookie/login 即可。
+**Q: 图片上传失败怎么办？模型说"没有看到图片"？**
+A: 通常是因为服务端 session 状态异常，仅重新获取 Cookie 无效。正确步骤：
+1. 浏览器打开 https://aistudio.xiaomimimo.com
+2. **退出登录**（必须退出，不能只刷新页面）
+3. 重新登录
+4. 在管理面板重新导入 Cookie
+如果是账号被限制，换另一个账号。
 
 **Q: tool_call 没有被提取？**
 A: 查看日志确认响应内容。如果 MiMo 没有按预期输出工具调用格式，可能是提示词不够清晰，或者该模型理解力有限。推荐使用 `mimo-v2-pro` 进行工具调用。
