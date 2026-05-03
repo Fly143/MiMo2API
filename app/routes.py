@@ -36,9 +36,23 @@ THINK_CLOSE = "</think>"
 
 MODELS_CONFIG_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/config"
 
-# MiMo V2 全系列上下文窗口 = 128K tokens
-# 网页端实测：三体全集 (925K字) 可读取约 10.95% ≈ 100K 字
-MIMO_CONTEXT = 131072
+# ─── 模型上下文参数 ───────────────────────────────────────────
+# 官方数据：https://platform.xiaomimimo.com/static/docs/pricing.md
+
+def _model_context(model_id: str) -> dict:
+    """返回 (context_length, max_output_tokens) 或 None。"""
+    m = model_id.lower()
+    # Pro / v2.5 系列 — 1M 上下文
+    if any(prefix in m for prefix in ("v2.5-pro", "v2-pro", "v2.5")):
+        return {"context_length": 1048576, "max_output_tokens": 131072}
+    # Flash — 256K 上下文, 64K 输出
+    if "v2-flash" in m or "v2-flash" in m:
+        return {"context_length": 262144, "max_output_tokens": 65536}
+    # Omni — 256K 上下文
+    if "v2-omni" in m:
+        return {"context_length": 262144, "max_output_tokens": 131072}
+    # 未知模型 → 不返回上下文信息
+    return None
 
 _models_cache = None
 _models_lock = asyncio.Lock()
@@ -103,15 +117,18 @@ async def list_models(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     asyncio.create_task(_background_refresh())
     models = get_models_list()
+    ctx_items = [(m, _model_context(m)) for m in models]
     return {
         "object": "list",
         "data": [
             {
                 "id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
-                "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
-                "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
+                "context_length": ctx["context_length"],
+                "context_window": ctx["context_length"],
+                "max_input_tokens": ctx["context_length"],
+                "max_output_tokens": ctx["max_output_tokens"],
             }
-            for m in models
+            for m, ctx in ctx_items if ctx is not None
         ]
     }
 
@@ -121,15 +138,18 @@ async def refresh_models(authorization: Optional[str] = Header(None)):
     if not validate_api_key(authorization):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = await discover_models()
+    ctx_items = [(m, _model_context(m)) for m in models]
     return {
         "object": "list",
         "data": [
             {
                 "id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
-                "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
-                "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
+                "context_length": ctx["context_length"],
+                "context_window": ctx["context_length"],
+                "max_input_tokens": ctx["context_length"],
+                "max_output_tokens": ctx["max_output_tokens"],
             }
-            for m in models
+            for m, ctx in ctx_items if ctx is not None
         ]
     }
 
@@ -140,11 +160,18 @@ async def get_model(model_id: str, authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = get_models_list()
     if model_id in models:
-        return {
+        ctx = _model_context(model_id)
+        base = {
             "id": model_id, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
-            "max_input_tokens": MIMO_CONTEXT, "max_output_tokens": MIMO_CONTEXT,
-            "context_length": MIMO_CONTEXT, "context_window": MIMO_CONTEXT,
         }
+        if ctx:
+            base.update({
+                "context_length": ctx["context_length"],
+                "context_window": ctx["context_length"],
+                "max_input_tokens": ctx["context_length"],
+                "max_output_tokens": ctx["max_output_tokens"],
+            })
+        return base
     raise HTTPException(status_code=404, detail={"error": {"message": f"Model {model_id} not found"}})
 
 
