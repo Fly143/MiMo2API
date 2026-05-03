@@ -380,7 +380,7 @@ pip install -r requirements.txt
 | 限制 | 说明 |
 |------|------|
 | Token 有效期 | serviceToken 约 24 小时过期，过期后需网页端退出并重新登录（仅刷新 Cookie 无效），见下方 FAQ |
-| 多模态模型 | `mimo-v2.5` / `mimo-v2.5-pro` / `mimo-v2-omni` 支持图片；所有 V2 模型支持文件上传 |
+| 多模态模型 | `mimo-v2.5` / `mimo-v2-omni` 支持识图；全系模型支持文件上传与图片 OCR 文字提取 |
 | TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
 | 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
 | 不支持 Embeddings | 仅实现 Chat Completions 端点 |
