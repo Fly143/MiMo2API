@@ -745,8 +745,8 @@ async def admin_models():
 TT_API_BASE = "https://aistudio.xiaomimimo.com"
 
 VOICE_MAP = {
-    "alloy": "冰糖", "echo": "冰糖", "fable": "冰糖",
-    "onyx": "冰糖", "nova": "冰糖", "shimmer": "冰糖",
+    "alloy": "冰糖", "echo": "茉莉", "fable": "白桦",
+    "onyx": "苏打", "nova": "Mia", "shimmer": "Chloe",
 }
 
 
