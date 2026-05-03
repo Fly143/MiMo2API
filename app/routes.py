@@ -733,11 +733,13 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
     if not text:
         raise HTTPException(status_code=400, detail={"error": {"message": "input is required"}})
 
+    model = body.get("model", "mimo-v2.5-tts")
     voice_name = body.get("voice", "alloy")
     speed = body.get("speed", 1.0)
     resp_format = body.get("response_format", "wav")
     style_hint = body.get("style", "")
 
+    # 选账号 — 遍历找到有完整凭证的账号
     accounts = config_manager.config.mimo_accounts
     if not accounts:
         raise HTTPException(status_code=503, detail={"error": {"message": "no mimo accounts configured"}})
@@ -752,8 +754,6 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
     st = acct.service_token
     uid = acct.user_id
 
-    mimo_voice = VOICE_MAP.get(voice_name, voice_name)
-    style_desc = _generate_style(speed, style_hint)
     conversation_id = uuid.uuid4().hex[:32]
     msg_id = uuid.uuid4().hex[:32]
 
@@ -761,8 +761,34 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
     query = f"xiaomichatbot_ph={ph}"
     base_headers = {"Content-Type": "application/json", "Cookie": cookie_str}
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        # 0) 创建 TTS 对话
+    # 模型路由：内置音色 / 音色设计 / 语音克隆（依赖模型名后缀）
+    if model.endswith("-voicedesign"):
+        # 文本描述自定义音色：style 作为音色描述 → user
+        user_content = style_hint or "生成一个自然流畅的声音"
+        audio_config = {"format": "wav"}
+    elif model.endswith("-voiceclone"):
+        # 语音克隆：voice 参数传 data URI → 上传到 FDS → 用 FDS URL 调用
+        user_content = ""
+        if not voice_name or voice_name == "alloy" or "," not in str(voice_name):
+            raise HTTPException(status_code=400, detail={"error": {"message": "voiceclone requires voice=data:audio/...;base64,..."}})
+        # 提取 mime_type
+        mime_type = "audio/wav"
+        if ";" in voice_name:
+            mime_part = voice_name.split(";")[0].replace("data:", "", 1)
+            if mime_part:
+                mime_type = mime_part
+        uploaded = await upload_media_to_mimo(voice_name, mime_type, acct, model="mimo-v2-omni")
+        if not uploaded or not uploaded.get("fileUrl"):
+            raise HTTPException(status_code=502, detail={"error": {"message": "voiceclone audio upload failed"}})
+        audio_config = {"format": "wav", "voice": uploaded["fileUrl"]}
+    else:
+        # 内置音色模型（默认分支，兼容任何 TTS 模型名）
+        mimo_voice = VOICE_MAP.get(voice_name, voice_name)
+        user_content = _generate_style(speed, style_hint)
+        audio_config = {"format": "wav", "voice": mimo_voice}
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        # 0) 创建 TTS 对话（否则 TTS generate 会报 conversation not exist）
         sr = await client.post(
             f"{TT_API_BASE}/open-apis/chat/conversation/save?{query}",
             json={"conversationId": conversation_id, "title": "新对话", "type": "tts"},
@@ -777,12 +803,15 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
             "msgId": msg_id,
             "content": {
                 "messages": [
-                    {"role": "user", "content": style_desc},
+                    {"role": "user", "content": user_content},
                     {"role": "assistant", "content": text},
                 ],
-                "audio": {"format": "wav", "voice": mimo_voice},
+                "audio": audio_config,
             },
-            "modelConfig": {"modelCode": "mimo-v2.5-tts", "scene": "BRIEF_DESCRIPTION"},
+            "modelConfig": {
+                "modelCode": model,
+                "scene": "BRIEF_DESCRIPTION",
+            },
         }
         r = await client.post(
             f"{TT_API_BASE}/open-apis/tts/v2/generate?{query}",
