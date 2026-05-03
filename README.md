@@ -413,6 +413,8 @@ curl http://localhost:8080/v1/audio/speech \
 
 **RikkaHub：** 直接在聊天中使用标签控制发音（`(河南话)今天可冷`），无需额外配置。
 
+> **📖 参考官方文档：** [小米 MiMo 语音合成 API](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis) / [v2.5 版 TTS](https://platform.xiaomimimo.com/docs/zh-CN/usage-guide/speech-synthesis-v2.5) — 包含支持的音色列表、标签控制规则、SSML 等详细信息。
+
 ## 工具调用详解
 
 MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 多策略提取**实现：
