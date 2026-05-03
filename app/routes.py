@@ -12,7 +12,7 @@ import httpx
 from typing import Optional, Tuple
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from .models import (
     OpenAIRequest, OpenAIResponse, OpenAIChoice, OpenAIMessage,
     OpenAIDelta, OpenAIUsage, ParseCurlRequest, TestAccountRequest
@@ -915,3 +915,154 @@ async def clear_usage():
 async def admin_models():
     """返回可用模型列表（无鉴权，仅供管理页面动态加载）。"""
     return {"models": get_models_list()}
+
+
+# ─── TTS (语音合成) ──────────────────────────────────────────
+# MiMo TTS 流程：POST /open-apis/tts/v2/generate (异步创建) →
+#              GET  /open-apis/tts/generateStatus    (轮询)  →
+#              GET  audioUrl                          (下载音频)
+# 映射到 OpenAI /v1/audio/speech 格式
+
+TT_API_BASE = "https://aistudio.xiaomimimo.com"
+
+# OpenAI 音色 → MiMo 音色映射（可通过 style 参数直接指定小米音色名）
+VOICE_MAP = {
+    "alloy": "冰糖",
+    "echo": "冰糖",
+    "fable": "冰糖",
+    "onyx": "冰糖",
+    "nova": "冰糖",
+    "shimmer": "冰糖",
+}
+
+
+def _generate_style(speed: float, style_hint: str = "") -> str:
+    """从 OpenAI speed 参数生成 MiMo 风格描述。"""
+    if style_hint:
+        return style_hint
+    if speed < 0.8:
+        return "语速较慢，声音沉稳柔和"
+    if speed > 1.2:
+        return "语速稍快，声音明亮有活力"
+    return "语速正常，声音自然流畅"
+
+
+@router.post("/v1/audio/speech")
+async def tts_speech(request: Request, authorization: Optional[str] = Header(None)):
+    if not validate_api_key(authorization):
+        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
+
+    body = await request.json()
+    text = body.get("input", "")
+    if not text:
+        raise HTTPException(status_code=400, detail={"error": {"message": "input is required"}})
+
+    voice_name = body.get("voice", "alloy")
+    speed = body.get("speed", 1.0)
+    resp_format = body.get("response_format", "wav")
+    style_hint = body.get("style", "")
+
+    # 选账号 — 遍历找到有完整凭证的账号
+    accounts = config_manager.config.mimo_accounts
+    if not accounts:
+        raise HTTPException(status_code=503, detail={"error": {"message": "no mimo accounts configured"}})
+    acct = None
+    for a in accounts:
+        if a.xiaomichatbot_ph and a.service_token and a.user_id:
+            acct = a
+            break
+    if not acct:
+        raise HTTPException(status_code=503, detail={"error": {"message": "no account with complete TTS credentials"}})
+    ph = acct.xiaomichatbot_ph
+    st = acct.service_token
+    uid = acct.user_id
+
+    mimo_voice = VOICE_MAP.get(voice_name, voice_name)
+    style_desc = _generate_style(speed, style_hint)
+    conversation_id = uuid.uuid4().hex[:32]
+    msg_id = uuid.uuid4().hex[:32]
+
+    cookie_str = f'userId={uid}; serviceToken="{st}"; xiaomichatbot_ph="{ph}"'
+    query = f"xiaomichatbot_ph={ph}"
+    base_headers = {"Content-Type": "application/json", "Cookie": cookie_str}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # 0) 创建 TTS 对话（否则 TTS generate 会报 conversation not exist）
+        save_payload = {
+            "conversationId": conversation_id,
+            "title": "新对话",
+            "type": "tts",
+        }
+        sr = await client.post(
+            f"{TT_API_BASE}/open-apis/chat/conversation/save?{query}",
+            json=save_payload, headers=base_headers,
+        )
+        if sr.status_code != 200 or sr.json().get("code") != 0:
+            raise HTTPException(status_code=502, detail={"error": {"message": "TTS conversation create failed"}})
+
+        # 1) 提交 TTS 任务
+        payload = {
+            "conversationId": conversation_id,
+            "msgId": msg_id,
+            "content": {
+                "messages": [
+                    {"role": "user", "content": style_desc},
+                    {"role": "assistant", "content": text},
+                ],
+                "audio": {
+                    "format": "wav",
+                    "voice": mimo_voice,
+                },
+            },
+            "modelConfig": {
+                "modelCode": "mimo-v2.5-tts",
+                "scene": "BRIEF_DESCRIPTION",
+            },
+        }
+        r = await client.post(
+            f"{TT_API_BASE}/open-apis/tts/v2/generate?{query}",
+            json=payload, headers=base_headers,
+        )
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail={"error": {"message": f"TTS generate failed: {r.status_code}"}})
+        data = r.json()
+        if data.get("code") != 0:
+            raise HTTPException(status_code=502, detail={"error": {"message": f"TTS generate error: {data.get('msg', 'unknown')}"}})
+
+        task_id = data["data"]["taskId"]
+
+        # 2) 轮询生成状态（最多等 60 秒）
+        for _ in range(60):
+            await asyncio.sleep(1)
+            sr = await client.get(
+                f"{TT_API_BASE}/open-apis/tts/generateStatus?{query}&taskId={task_id}",
+                headers=base_headers,
+            )
+            if sr.status_code != 200:
+                continue
+            sdata = sr.json()
+            if sdata.get("code") != 0:
+                continue
+            status = sdata["data"].get("status")
+            if status == "success":
+                audio_url = sdata["data"]["audioUrl"]
+                break
+            elif status == "failed":
+                raise HTTPException(status_code=502, detail={"error": {"message": "TTS generation failed"}})
+        else:
+            raise HTTPException(status_code=504, detail={"error": {"message": "TTS generation timed out"}})
+
+        # 3) 下载音频
+        ar = await client.get(audio_url)
+        if ar.status_code not in (200, 206):
+            raise HTTPException(status_code=502, detail={"error": {"message": "TTS audio download failed"}})
+        audio_bytes = ar.content
+
+    # 响应格式转换（默认 wav，有 ffmpeg 才支持其他格式）
+    content_type = "audio/wav"
+    if resp_format in ("wav",):
+        content_type = "audio/wav"
+    else:
+        pass  # 需要 ffmpeg 转码，暂只支持 wav
+
+    return Response(content=audio_bytes, media_type=content_type)
