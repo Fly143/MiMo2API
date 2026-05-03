@@ -33,7 +33,8 @@
   - [文件上传](#5-文件上传文本文件)
   - [工具调用（Function Calling）](#6-工具调用function-calling)
   - [深度思考模式](#7-深度思考模式)
-  - [模型发现与刷新](#8-模型发现与刷新)
+  - [模型发现与刷新](#7-模型发现与刷新)
+  - [语音合成 (TTS)](#8-语音合成-tts)
 - [工具调用详解](#工具调用详解)
 - [无工具分支 (no-tools)](#无工具分支-no-tools)
 - [管理命令](#管理命令)
@@ -54,6 +55,7 @@
 - **多账号池** — 管理面板配置多个 MiMo 账号，轮询负载均衡，自动故障转移
 - **动态模型发现** — 启动时从 MiMo 官方 API 实时拉取可用模型列表，无需手动维护
 - **凭证管理** — 支持 Cookie 导入、cURL 导入两种配置方式
+- **语音合成（TTS）** — 标准 `/v1/audio/speech` 端点，支持三种模式：内置音色（任意 `mimo-v*.5-tts` 模型）、音色设计（`-voicedesign` 后缀）、语音克隆（`-voiceclone` 后缀 + 音频 data URI）
 - **CORS 全开** — 允许任意来源跨域访问
 - **无工具分支** — 提供 `no-tools` 分支，移除工具调用逻辑，适合纯对话场景，输出质量更高
 
@@ -340,6 +342,77 @@ curl -X POST http://localhost:8080/v1/models/refresh \
   -H "Authorization: Bearer sk-mimo"
 ```
 
+### 8. 语音合成 (TTS)
+
+支持 OpenAI 兼容的 `/v1/audio/speech` 端点，三种模式通过**模型名后缀**区分：
+
+#### 8.1 内置音色（默认模式）
+
+使用任何 TTS 模型名即可（如 `mimo-v2.5-tts`），通过 `voice` 参数选择音色：
+
+```bash
+curl http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts",
+    "input": "今天天气真不错",
+    "voice": "冰糖"
+  }' --output output.wav
+```
+
+支持的语气/音色控制：
+- **内置音色：** `冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`、`mimo_default`
+- **OpenAI 兼容名：** `alloy`/`echo`/`fable`/`onyx`/`nova`/`shimmer` 均映射到 `冰糖`
+- **语速控制：** `speed` 参数（0.5~2.0）
+- **标签控制：** 在 `input` 文本中直接插入 `(河南话)`、`(四川话)`、`[微笑]`、`[生气]` 等标签
+- **自然语言风格：** `style` 参数，如 `轻声细语`、`激昂慷慨`
+
+#### 8.2 音色设计（自定义音色）
+
+模型名以 `-voicedesign` 结尾，通过 `style` 参数描述想要的音色：
+
+```bash
+curl http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts-voicedesign",
+    "input": "欢迎使用我们的产品",
+    "style": "年轻女性，声音甜美，语速适中"
+  }' --output output.wav
+```
+
+`style` 支持自然语言描述，不传则默认 `生成一个自然流畅的声音`。
+
+#### 8.3 语音克隆（音频样本克隆）
+
+模型名以 `-voiceclone` 结尾，`voice` 参数传音频 data URI：
+
+```bash
+# 准备音频样本
+BASE64=$(base64 -w0 sample.wav)
+
+curl http://localhost:8080/v1/audio/speech \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"mimo-v2.5-tts-voiceclone\",
+    \"input\": \"这是克隆出来的声音\",
+    \"voice\": \"data:audio/wav;base64,${BASE64}\"
+  }" --output cloned.wav
+```
+
+> **原理：** 自动将音频上传到小米 FDS 文件服务，然后以 FDS URL 作为音色参考提交 TTS 任务。
+
+#### 8.4 客户端配置
+
+**ChatBox / NextChat / LobeChat：**
+- 在 TTS 配置中选择 `/v1/audio/speech` 端点（默认 OpenAI 标准路径即可）
+- 模型填写 `mimo-v2.5-tts`（内置音色）或其他后缀变体
+
+**RikkaHub：** 直接在聊天中使用标签控制发音（`(河南话)今天可冷`），无需额外配置。
+
 ## 工具调用详解
 
 MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 多策略提取**实现：
@@ -520,7 +593,7 @@ pip install -r requirements.txt
 |------|------|
 | Token 有效期 | serviceToken 约 24 小时过期，过期后需网页端退出并重新登录（仅刷新 Cookie 无效），见下方 FAQ |
 | 多模态模型 | `mimo-v2.5` / `mimo-v2-omni` 支持识图；全系模型支持文件上传与图片 OCR 文字提取 |
-| TTS 模型 | `mimo-v2-tts` 需要官方 API Key，逆向方式不支持 |
+| TTS 模型 | 支持 `mimo-v*.5-tts`（内置音色）、`-voicedesign`（音色设计）、`-voiceclone`（语音克隆）三种模式 |
 | 并发限制 | 取决于 MiMo 服务端限制（通常 1-2 并发/账号），多账号可缓解 |
 | 不支持 Embeddings | 仅实现 Chat Completions 端点 |
 | 非流式实际走 SSE | MiMo API 只提供 SSE 流，非流式请求会缓冲全部 SSE 后合并返回 |
