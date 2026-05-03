@@ -10,8 +10,6 @@
 本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
 本项目所修改代码均为ai完成，不含任何一句人工代码，望周知！
 
-> **🎯 特别致谢：** [GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) 项目提供了宝贵的会话管理（消息指纹续接 MiMo conversationId）设计参考。
-
 > **💡 不需要工具调用？** 如果你的使用场景是纯对话（写作、翻译、代码、问答），建议使用 [`no-tools` 分支](#无工具分支-no-tools) — 不注入工具 prompt，上下文更干净，输出质量更高。
 
 
@@ -556,3 +554,4 @@ MIT License
 ---
 
 **致谢：** 小米 MiMo AI Studio 提供的基础 API 服务。
+[GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) — 会话管理（消息指纹续接 MiMo conversationId）设计参考。
