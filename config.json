@@ -1,0 +1,21 @@
+{
+  "api_keys": "sk-mimo",
+  "mimo_accounts": [
+    {
+      "service_token": "/vjQa88K2JeX+vuUvl6J6CP5z6NQR1rTnOPHhsy+tvE3YOgxad89zj2rBQRScSZQD2VelPQwBFk7PtlX2H73QB8QPhbdkBitJ0pD+ZZeId4eGrzS/EvxJaINpL2LIEOI1g/ulqJe5H3d1BrG1CERQcrp5G1o08wpgrLeNsBDzMOe0Moq005hge2FTsCnIVNg4/Tub13cQnSHMSdA5BAizfP2Xutgfyvpc0J7FzPp4eoaNUsQGRPWTfiHWpAAikzRemRkLIbMZPZiICnIjt4LZSZjblfeAoddeup7Y3WTzDbz+7NJq12nR4qB/0h9Fnr4K68DVX/4z/8timwBqutCTjMnvqUnKMRwfXYliN1Sdm8=",
+      "user_id": "2230906476",
+      "xiaomichatbot_ph": "scsmGziWEeu0mxF3UP6kNA==",
+      "login_time": "05-03 14:18",
+      "last_test": "",
+      "is_valid": true
+    },
+    {
+      "service_token": "/vjQa88K2JeX+vuUvl6J6E2fJFlvVqKygsqLQbngogVGMwJ48CnAOchoHULhyHHQEOSyYtbgNQGU9aNBwlMLLZzilZF1U9vu+4Gs/rS6vE1aV0QLszybgOMES8iFB/aM6sGeb2+Jc+7l1dKN+QRArm2rhaJ1mUS2nqkdzdjZtrArTewYkJDMnxG7UZp3pp6nCYnkEfPVsRFYg3X2ge5O7I4b/ilbVWmWETqAXaTlKH8TW4qy6tRk/gYLF5/UmQYOVksYwBhqHUuRb9WHWNVSjsYZZ/W3FluusH/7YNw5Xyf8bGUSzmrJmQDhrMbctQ8GO77uq791S35baedx7xBnkswAbLouJqvp5GpRueqwhug=",
+      "user_id": "690679145",
+      "xiaomichatbot_ph": "3cTaNE5ZtMiNwFVbB8SWbQ==",
+      "login_time": "05-03 14:21",
+      "last_test": "",
+      "is_valid": true
+    }
+  ]
+}

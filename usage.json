@@ -1,0 +1,50 @@
+{
+  "models": {
+    "mimo-v2.5": {
+      "prompt_tokens": 7841,
+      "completion_tokens": 285,
+      "total_tokens": 8126,
+      "requests": 2
+    },
+    "mimo-v2.5-pro": {
+      "prompt_tokens": 3104,
+      "completion_tokens": 29,
+      "total_tokens": 3133,
+      "requests": 1
+    },
+    "mimo-v2-flash": {
+      "prompt_tokens": 726,
+      "completion_tokens": 2680,
+      "total_tokens": 3406,
+      "requests": 5
+    }
+  },
+  "total": {
+    "prompt_tokens": 11671,
+    "completion_tokens": 2994,
+    "total_tokens": 14665,
+    "requests": 8
+  },
+  "daily": {
+    "2026-05-03": {
+      "mimo-v2.5": {
+        "prompt_tokens": 7841,
+        "completion_tokens": 285,
+        "total_tokens": 8126,
+        "requests": 2
+      },
+      "mimo-v2.5-pro": {
+        "prompt_tokens": 3104,
+        "completion_tokens": 29,
+        "total_tokens": 3133,
+        "requests": 1
+      },
+      "mimo-v2-flash": {
+        "prompt_tokens": 726,
+        "completion_tokens": 2680,
+        "total_tokens": 3406,
+        "requests": 5
+      }
+    }
+  }
+}
