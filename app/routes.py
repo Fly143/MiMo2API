@@ -973,11 +973,11 @@ TT_API_BASE = "https://aistudio.xiaomimimo.com"
 # OpenAI 音色 → MiMo 音色映射（可通过 style 参数直接指定小米音色名）
 VOICE_MAP = {
     "alloy": "冰糖",
-    "echo": "冰糖",
-    "fable": "冰糖",
-    "onyx": "冰糖",
-    "nova": "冰糖",
-    "shimmer": "冰糖",
+    "echo": "茉莉",
+    "fable": "白桦",
+    "onyx": "苏打",
+    "nova": "Mia",
+    "shimmer": "Chloe",
 }
 
 

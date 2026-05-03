@@ -363,7 +363,7 @@ curl http://localhost:8080/v1/audio/speech \
 
 支持的语气/音色控制：
 - **内置音色：** `冰糖`（中文女声）、`茉莉`（中文女声）、`苏打`（中文男声）、`白桦`（中文男声）、`Mia`（英文女声）、`Chloe`（英文女声）、`Milo`（英文男声）、`Dean`（英文男声）、`mimo_default`（默认）
-- **OpenAI 兼容名：** `alloy`/`echo`/`fable`/`onyx`/`nova`/`shimmer` 均映射到 `冰糖`
+- **OpenAI 兼容名：** `alloy`→`冰糖` / `echo`→`茉莉` / `fable`→`白桦` / `onyx`→`苏打` / `nova`→`Mia` / `shimmer`→`Chloe`
 - **语速控制：** `speed` 参数（0.5~2.0）
 - **唱歌模式：** 使用 `mimo-v2.5-tts` 模型，input 文本以 `(唱歌)` 开头即可
 - **风格标签控制：** 在 `input` 文本开头插入 `(风格)` 标签指定发音风格
