@@ -155,12 +155,13 @@
         /* Usage table */
         .usage-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
         .usage-tbl th, .usage-tbl td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border); }
-        .usage-tbl th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+        .usage-tbl th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
         .usage-tbl td { font-variant-numeric: tabular-nums; }
         .usage-tbl tr:last-child td { border-bottom: none; }
         .usage-tbl .model-cell { text-align: left; }
+        .usage-scroll { max-height: 440px; overflow-y: auto; }
         .usage-tbl .total-row { font-weight: 600; border-top: 2px solid var(--primary); }
-        .usage-tbl .total-row td { padding-top: 14px; color: #a5b4fc; }
+        .usage-tbl .total-row td { padding-top: 14px; color: #a5b4fc; background: var(--bg-card); position: sticky; bottom: 0; }
         .usage-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; }
         .usage-empty .icon { font-size: 40px; margin-bottom: 10px; }
 
@@ -183,23 +184,13 @@
             <p>小米 MiMo 模型 OpenAI 兼容 API</p>
         </div>
 
-        <!-- API Keys 管理 -->
-        <div class="card">
-            <h2>API Keys</h2>
-            <div class="field">
-                <label>多个 Key 用逗号分隔</label>
-                <input type="text" id="apiKeys" placeholder="sk-key1, sk-key2, sk-key3">
-            </div>
-            <button class="btn-primary" onclick="saveKeys()">保存配置</button>
-            <div id="keysResult"></div>
-        </div>
-
-        <!-- 标签页：cURL / Cookie / 账号 -->
+        <!-- 标签页：cURL / Cookie / 账号 / 用量统计 / API Key -->
         <div class="card" style="padding: 0; overflow: visible;">
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('curl')">cURL</div>
                 <div class="tab" onclick="switchTab('cookie')">Cookie</div>
                 <div class="tab" onclick="switchTab('accounts')">账号</div>
+                <div class="tab" onclick="switchTab('apikey')">API Key</div>
                 <div class="tab" onclick="switchTab('usage')">用量统计</div>
             </div>
 
@@ -210,7 +201,7 @@
                         <summary style="cursor:pointer;color:var(--primary);font-size:13px;padding:6px 0">如何获取 cURL?</summary>
                         <ol style="margin:10px 0;padding-left:20px;color:var(--text-muted);font-size:13px;line-height:1.8">
                             <li>登录 <a href="https://aistudio.xiaomimimo.com" target="_blank" style="color:var(--primary)">aistudio.xiaomimimo.com</a></li>
-                            <li>按 F12 → Network 标签（手机需电脑模式）</li>
+                            <li>按 F12 → Network 标签</li>
                             <li>发一条消息，找到 <code style="background:var(--bg-input);padding:1px 5px;border-radius:3px;font-size:12px">chat</code> 请求</li>
                             <li>右键 → Copy as cURL，粘贴到下方</li>
                         </ol>
@@ -222,11 +213,13 @@
 
                 <!-- Cookie 手动输入 -->
                 <div id="panel-cookie" class="tab-panel">
-                    <div class="status info">从浏览器 Cookie 中获取以下三个值：<br>F12 → Application → Cookies → aistudio.xiaomimimo.com</div>
+                    <div class="status info">从浏览器 Cookie 中获取以下三个值：<br>F12 → Application → Cookies → aistudio.xiaomimimo.com<br>或直接粘贴整段 Cookie 字符串（用 ; 分隔），点"解析填充"自动拆分</div>
+                    <textarea id="c-raw" placeholder="粘贴整段 Cookie，如: serviceToken=&quot;xxx&quot;; userId=123; xiaomichatbot_ph=&quot;yyy&quot;" style="height:60px"></textarea>
+                    <button class="btn-outline" style="width:100%;margin-bottom:8px" onclick="parseCookieStr()">解析填充 ↓</button>
                     <div class="field"><label>serviceToken</label><input type="text" id="c-st" placeholder="粘贴 serviceToken"></div>
                     <div class="field"><label>userId</label><input type="text" id="c-uid" placeholder="粘贴 userId"></div>
                     <div class="field"><label>xiaomichatbot_ph</label><input type="text" id="c-ph" placeholder="粘贴 xiaomichatbot_ph"></div>
-                    <button class="btn-primary" style="width:100%" onclick="saveCookie()">保存账号</button>
+                    <button id="btn-save-cookie" class="btn-primary" style="width:100%" onclick="saveCookie()">保存账号</button>
                 </div>
 
                 <!-- 账号管理 -->
@@ -238,7 +231,16 @@
                     </div>
                 </div>
 
-                <!-- 用量统计 -->
+                <!-- API Key 设置 -->
+                <div id="panel-apikey" class="tab-panel">
+                    <div class="field">
+                        <label>多个 Key 用逗号分隔</label>
+                        <input type="text" id="apiKeys" placeholder="sk-key1, sk-key2, sk-key3">
+                    </div>
+                    <button class="btn-primary" style="width:100%" onclick="saveKeys()">保存配置</button>
+                    <div id="keysResult"></div>
+                </div>
+
                 <div id="panel-usage" class="tab-panel">
                     <div id="usageContent"></div>
                     <div class="btn-group" style="margin-top:14px;flex-wrap:nowrap;flex-direction:row!important">
@@ -270,7 +272,7 @@
         }
         function switchTab(t) {
             document.querySelectorAll('.tab').forEach((el, i) => {
-                el.className = 'tab' + (['curl','cookie','accounts','usage'][i] === t ? ' active' : '');
+                el.className = 'tab' + (['curl','cookie','accounts','apikey','usage'][i] === t ? ' active' : '');
             });
             document.querySelectorAll('.tab-panel').forEach(p => p.className = 'tab-panel');
             $id('panel-' + t).className = 'tab-panel active';
@@ -344,9 +346,11 @@
 
         async function saveParsed() {
             if (!parsed) return;
-            cfg.mimo_accounts = cfg.mimo_accounts || [];
-            cfg.mimo_accounts.push(parsed);
+            const btn = event.target;
+            btn.disabled = true; btn.textContent = '保存中...';
             try {
+                cfg.mimo_accounts = cfg.mimo_accounts || [];
+                cfg.mimo_accounts.push(parsed);
                 await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -358,6 +362,35 @@
                 toast('账号已添加');
                 loadConfig();
             } catch (e) { toast('保存失败', true); }
+            finally { btn.disabled = false; btn.textContent = '添加账号'; }
+        }
+
+        // === Cookie 解析 ===
+        function parseCookieStr() {
+            const raw = $id('c-raw').value.trim();
+            if (!raw) { toast('请粘贴 Cookie 字符串', true); return; }
+            const parts = raw.split(';');
+            const map = {};
+            for (let p of parts) {
+                p = p.trim();
+                if (!p) continue;
+                const eq = p.indexOf('=');
+                if (eq === -1) continue;
+                let key = p.substring(0, eq).trim();
+                let val = p.substring(eq + 1).trim();
+                // 去掉首尾引号
+                if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                    val = val.slice(1, -1);
+                }
+                map[key] = val;
+            }
+            if (map.serviceToken) $id('c-st').value = map.serviceToken;
+            if (map.userId) $id('c-uid').value = map.userId;
+            if (map.xiaomichatbot_ph) $id('c-ph').value = map.xiaomichatbot_ph;
+            const filled = [map.serviceToken, map.userId, map.xiaomichatbot_ph].filter(Boolean).length;
+            if (filled >= 3) { toast('已填充 ' + filled + ' 个字段'); }
+            else if (filled > 0) { toast('已填充 ' + filled + ' 个字段（缺少 ' + (3 - filled) + ' 个）', true); }
+            else { toast('未识别到有效字段', true); }
         }
 
         // === Cookie 手动保存 ===
@@ -366,6 +399,8 @@
             const uid = $id('c-uid').value.trim();
             const ph = $id('c-ph').value.trim();
             if (!st || !uid || !ph) { toast('请填写所有字段', true); return; }
+            const btn = $id('btn-save-cookie');
+            btn.disabled = true; btn.textContent = '验证中...';
             try {
                 const r = await fetch('/api/account/import-cookie', {
                     method: 'POST',
@@ -381,6 +416,7 @@
                     toast(d.error || '保存失败', true);
                 }
             } catch (e) { toast('请求失败', true); }
+            finally { btn.disabled = false; btn.textContent = '保存账号'; }
         }
 
         // === 账号管理 ===
@@ -478,7 +514,7 @@
                     return;
                 }
 
-                let html = '<table class="usage-tbl"><thead><tr><th class="model-cell">模型</th><th>请求</th><th>输入</th><th>输出</th><th>总计</th></tr></thead><tbody>';
+                let html = '<div class="usage-scroll"><table class="usage-tbl"><thead><tr><th class="model-cell">模型</th><th>请求</th><th>输入</th><th>输出</th><th>总计</th></tr></thead><tbody>';
                 for (const [model, m] of entries) {
                     html += `<tr>
                         <td class="model-cell">${model}</td>
@@ -497,7 +533,7 @@
                         <td>${fmt(total.total_tokens)}</td>
                     </tr>`;
                 }
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
                 $id('usageContent').innerHTML = html;
             } catch (e) {
                 $id('usageContent').innerHTML = '<div class="usage-empty">加载失败: ' + e.message + '</div>';
