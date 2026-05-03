@@ -10,6 +10,8 @@
 本项目基于原[mimo2api](https://github.com/Water008/MiMo2API) 修改。
 本项目所修改代码均为ai完成，不含任何一句人工代码，望周知！
 
+> **🎯 特别致谢：** [GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) 项目提供了宝贵的会话管理（消息指纹续接 MiMo conversationId）设计参考。
+
 > ⚠️ **这是 `no-tools` 分支** — 不支持 Function Calling。如需工具调用，请切换到 [`main` 分支](https://github.com/Fly143/MiMo2API)。
 
 

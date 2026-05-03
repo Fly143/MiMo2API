@@ -21,6 +21,11 @@ from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
+from .session_store import (
+    get_or_create_session as _get_or_create_session,
+    update_tokens as _update_session_tokens,
+    update_fingerprint as _update_session_fingerprint,
+)
 
 router = APIRouter()
 
@@ -305,10 +310,18 @@ async def chat_completions(
     thinking = bool(request.reasoning_effort)
     client = MimoClient(account)
 
+    # 会话管理：通过消息指纹续接 MiMo conversationId
+    conv_id, conv_is_new = _get_or_create_session(
+        account.user_id, request.messages, request.model
+    )
+    # 立即用当前消息更新指纹
+    _update_session_fingerprint(account.user_id, conv_id, request.messages)
+
     # 流式响应
     if request.stream:
         return StreamingResponse(
-            _stream_response(client, query, thinking, effective_model, multi_medias),
+            _stream_response(client, query, thinking, effective_model, multi_medias,
+                             conv_id=conv_id, account_id=account.user_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -319,7 +332,8 @@ async def chat_completions(
 
     # 非流式响应
     try:
-        content, think_content, usage = await client.call_api(query, thinking, effective_model, multi_medias)
+        content, think_content, usage = await client.call_api(
+            query, thinking, effective_model, multi_medias, conversation_id=conv_id)
 
         # 清理模型输出杂质
         content = _strip_citations(content)
@@ -327,6 +341,7 @@ async def chat_completions(
         # 保存用量
         if usage:
             _add_usage(request.model, usage.get("promptTokens", 0), usage.get("completionTokens", 0))
+            _update_session_tokens(account.user_id, conv_id, usage.get("promptTokens", 0))
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
@@ -348,7 +363,8 @@ async def chat_completions(
 
 async def _stream_response(
     client: MimoClient, query: str, thinking: bool, model: str,
-    multi_medias: list = None
+    multi_medias: list = None,
+    conv_id: str = None, account_id: str = None,
 ):
     """流式响应生成器（无工具调用版）。"""
     msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -420,6 +436,7 @@ async def _stream_response(
         # 保存流式用量
         if last_usage:
             _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+            _update_session_tokens(account_id, conv_id, last_usage.get("promptTokens", 0))
 
         yield "data: [DONE]\n\n"
 
