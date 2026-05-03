@@ -428,7 +428,30 @@ curl http://localhost:8080/v1/audio/speech \
 
 > **原理：** 自动将音频上传到小米 FDS 文件服务，然后以 FDS URL 作为音色参考提交 TTS 任务。
 
-#### 8.4 客户端配置
+#### 8.4 通过 /v1/chat/completions 调用 TTS（兼容官方格式）
+
+TTS 也可以通过标准 OpenAI 聊天接口调用，完全兼容官方 API 格式：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-v2.5-tts",
+    "messages": [
+      {"role": "user", "content": "轻快上扬的语调"},
+      {"role": "assistant", "content": "今天天气真不错"}
+    ],
+    "audio": {
+      "format": "wav",
+      "voice": "冰糖"
+    }
+  }'
+```
+
+返回 OpenAI chat.completion 格式，音频以 base64 编码在 `choices[0].message.audio.data` 中。
+
+#### 8.5 客户端配置
 
 **ChatBox / NextChat / LobeChat：**
 - 在 TTS 配置中选择 `/v1/audio/speech` 端点（默认 OpenAI 标准路径即可）

@@ -12,7 +12,7 @@ import httpx
 from typing import Optional, Tuple
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from .models import (
     OpenAIRequest, OpenAIResponse, OpenAIChoice, OpenAIMessage,
     OpenAIDelta, OpenAIUsage, ParseCurlRequest, TestAccountRequest
@@ -371,6 +371,51 @@ async def chat_completions(
     # 提取媒体和文本文件
     query_text, base64_medias, text_files, processed_msgs = extract_medias_from_messages(request.messages)
     effective_model = request.model
+
+    # TTS via /v1/chat/completions：检测 audio 字段和 TTS 模型名
+    if request.audio and ('-tts' in effective_model or '-voicedesign' in effective_model):
+        acct_tts = await _get_tts_account()
+        voice_name = request.audio.get("voice", "alloy")
+        resp_format = request.audio.get("format", "wav")
+
+        # 提取 user message（风格描述）和 assistant message（合成文本）
+        user_content = ""
+        synth_text = ""
+        for msg in request.messages:
+            if msg.role == "user" and isinstance(msg.content, str):
+                user_content = msg.content
+            elif msg.role == "assistant" and isinstance(msg.content, str):
+                synth_text = msg.content
+
+        if not synth_text:
+            raise HTTPException(status_code=400, detail={"error": {"message": "assistant message is required for TTS"}})
+
+        audio_bytes = await _tts_generate(effective_model, synth_text, voice_name, user_content, 1.0, acct_tts)
+
+        import base64 as b64_mod
+        b64_data = b64_mod.b64encode(audio_bytes).decode()
+
+        now_ts = int(time.time())
+        return JSONResponse(content={
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": now_ts,
+            "model": effective_model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "audio": {
+                        "id": f"audio-{uuid.uuid4().hex[:12]}",
+                        "data": b64_data,
+                        "expires_at": now_ts + 3600,
+                    },
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        })
 
     multi_medias = []
     if base64_medias:
@@ -947,45 +992,25 @@ def _generate_style(speed: float, style_hint: str = "") -> str:
     return "语速正常，声音自然流畅"
 
 
-@router.post("/v1/audio/speech")
-async def tts_speech(request: Request, authorization: Optional[str] = Header(None)):
-    if not validate_api_key(authorization):
-        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
-
-    body = await request.json()
-    text = body.get("input", "")
-    if not text:
-        raise HTTPException(status_code=400, detail={"error": {"message": "input is required"}})
-
-    model = body.get("model", "mimo-v2.5-tts")
-    voice_name = body.get("voice", "alloy")
-    speed = body.get("speed", 1.0)
-    resp_format = body.get("response_format", "wav")
-    style_hint = body.get("style", "")
-
-    # 选账号 — 遍历找到有完整凭证的账号
+async def _get_tts_account():
+    """获取有 TTS 凭证的账号。"""
     accounts = config_manager.config.mimo_accounts
     if not accounts:
         raise HTTPException(status_code=503, detail={"error": {"message": "no mimo accounts configured"}})
-    acct = None
     for a in accounts:
         if a.xiaomichatbot_ph and a.service_token and a.user_id:
-            acct = a
-            break
-    if not acct:
-        raise HTTPException(status_code=503, detail={"error": {"message": "no account with complete TTS credentials"}})
-    ph = acct.xiaomichatbot_ph
-    st = acct.service_token
-    uid = acct.user_id
+            return a
+    raise HTTPException(status_code=503, detail={"error": {"message": "no account with complete TTS credentials"}})
 
-    conversation_id = uuid.uuid4().hex[:32]
-    msg_id = uuid.uuid4().hex[:32]
 
-    cookie_str = f'userId={uid}; serviceToken="{st}"; xiaomichatbot_ph="{ph}"'
-    query = f"xiaomichatbot_ph={ph}"
-    base_headers = {"Content-Type": "application/json", "Cookie": cookie_str}
+async def _tts_generate(
+    model: str, text: str, voice_name: str,
+    style_hint: str, speed: float, acct,
+) -> bytes:
+    """执行 TTS 全流程：创建对话 → 提交任务 → 轮询 → 下载音频。"""
+    TT_API_BASE = "https://aistudio.xiaomimimo.com"
 
-    # 模型路由：内置音色 / 音色设计 / 语音克隆（依赖模型名后缀）
+    # 模型路由：内置音色 / 音色设计 / 语音克隆
     if model.endswith("-voicedesign"):
         user_content = style_hint or "生成一个自然流畅的声音"
         audio_config = {"format": "wav"}
@@ -1007,49 +1032,48 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
         user_content = _generate_style(speed, style_hint)
         audio_config = {"format": "wav", "voice": mimo_voice}
 
+    ph = acct.xiaomichatbot_ph
+    conversation_id = uuid.uuid4().hex[:32]
+    msg_id = uuid.uuid4().hex[:32]
+    cookie_str = f'userId={acct.user_id}; serviceToken="{acct.service_token}"; xiaomichatbot_ph="{ph}"'
+    query = f"xiaomichatbot_ph={ph}"
+    base_headers = {"Content-Type": "application/json", "Cookie": cookie_str}
+
     async with httpx.AsyncClient(timeout=300) as client:
-        # 0) 创建 TTS 对话（否则 TTS generate 会报 conversation not exist）
-        save_payload = {
-            "conversationId": conversation_id,
-            "title": "新对话",
-            "type": "tts",
-        }
+        # 0) 创建 TTS 对话
         sr = await client.post(
             f"{TT_API_BASE}/open-apis/chat/conversation/save?{query}",
-            json=save_payload, headers=base_headers,
+            json={"conversationId": conversation_id, "title": "新对话", "type": "tts"},
+            headers=base_headers,
         )
         if sr.status_code != 200 or sr.json().get("code") != 0:
             raise HTTPException(status_code=502, detail={"error": {"message": "TTS conversation create failed"}})
 
         # 1) 提交 TTS 任务
-        payload = {
-            "conversationId": conversation_id,
-            "msgId": msg_id,
-            "content": {
-                "messages": [
-                    {"role": "user", "content": user_content},
-                    {"role": "assistant", "content": text},
-                ],
-                "audio": audio_config,
-            },
-            "modelConfig": {
-                "modelCode": model,
-                "scene": "BRIEF_DESCRIPTION",
-            },
-        }
         r = await client.post(
             f"{TT_API_BASE}/open-apis/tts/v2/generate?{query}",
-            json=payload, headers=base_headers,
+            json={
+                "conversationId": conversation_id,
+                "msgId": msg_id,
+                "content": {
+                    "messages": [
+                        {"role": "user", "content": user_content},
+                        {"role": "assistant", "content": text},
+                    ],
+                    "audio": audio_config,
+                },
+                "modelConfig": {"modelCode": model, "scene": "BRIEF_DESCRIPTION"},
+            },
+            headers=base_headers,
         )
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail={"error": {"message": f"TTS generate failed: {r.status_code}"}})
-        data = r.json()
-        if data.get("code") != 0:
-            raise HTTPException(status_code=502, detail={"error": {"message": f"TTS generate error: {data.get('msg', 'unknown')}"}})
+        rdata = r.json()
+        if rdata.get("code") != 0:
+            raise HTTPException(status_code=502, detail={"error": {"message": f"TTS generate error: {rdata.get('msg', 'unknown')}"}})
+        task_id = rdata["data"]["taskId"]
 
-        task_id = data["data"]["taskId"]
-
-        # 2) 轮询生成状态（最多等 60 秒）
+        # 2) 轮询生成状态
         for _ in range(60):
             await asyncio.sleep(1)
             sr = await client.get(
@@ -1074,9 +1098,28 @@ async def tts_speech(request: Request, authorization: Optional[str] = Header(Non
         ar = await client.get(audio_url)
         if ar.status_code not in (200, 206):
             raise HTTPException(status_code=502, detail={"error": {"message": "TTS audio download failed"}})
-        audio_bytes = ar.content
+        return ar.content
 
-    # 响应格式转换（默认 wav，有 ffmpeg 才支持其他格式）
+
+@router.post("/v1/audio/speech")
+async def tts_speech(request: Request, authorization: Optional[str] = Header(None)):
+    if not validate_api_key(authorization):
+        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
+
+    body = await request.json()
+    text = body.get("input", "")
+    if not text:
+        raise HTTPException(status_code=400, detail={"error": {"message": "input is required"}})
+
+    model = body.get("model", "mimo-v2.5-tts")
+    voice_name = body.get("voice", "alloy")
+    speed = body.get("speed", 1.0)
+    resp_format = body.get("response_format", "wav")
+    style_hint = body.get("style", "")
+
+    acct = await _get_tts_account()
+    audio_bytes = await _tts_generate(model, text, voice_name, style_hint, speed, acct)
+
     content_type = "audio/wav"
     if resp_format in ("wav",):
         content_type = "audio/wav"
