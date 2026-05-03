@@ -283,7 +283,6 @@ async def chat_completions(
 
     multi_medias = []
     if base64_medias:
-        effective_model = "mimo-v2-omni"
         for media in base64_medias:
             media_obj = await upload_media_to_mimo(
                 media["base64"], media["mimeType"], account, effective_model
