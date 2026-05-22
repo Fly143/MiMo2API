@@ -232,5 +232,3 @@ class MimoClient:
         except Exception as e:
             print(f"[Cleanup] MiMo delete error: {e}")
             return False
-
-        return content, think_content

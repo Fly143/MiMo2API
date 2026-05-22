@@ -425,7 +425,8 @@ def _extract_json_tool_call(
             if tc:
                 return [tc]
 
-        start = text.find("}", brace + len(js)) + 1
+        # 继续从当前 JSON 块之后搜索，避免重复命中同一个 "{" 导致死循环。
+        start = brace + len(js)
 
 
 # ─── 策略3 + 策略3.5: <tool_call> XML（MiMo 原生 + Roo Code 格式）───

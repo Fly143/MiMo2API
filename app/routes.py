@@ -376,8 +376,6 @@ async def chat_completions(
 
     """OpenAI兼容的聊天接口。"""
 
-    account = config_manager.get_next_account()
-
     # # 请求日志（发版时关闭）
     # try:
     #     print(f"[REQ] model={request.model} stream={request.stream} "
