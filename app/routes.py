@@ -11,8 +11,9 @@ import re
 import httpx
 from typing import Optional, Tuple
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Request, Depends
 from fastapi.responses import StreamingResponse, Response, JSONResponse
+from .auth import verify_admin
 from .models import (
     OpenAIRequest, OpenAIResponse, OpenAIChoice, OpenAIMessage,
     OpenAIDelta, OpenAIUsage, ParseCurlRequest, TestAccountRequest
@@ -575,7 +576,7 @@ _ADMIN_HTML = (_Path(__file__).parent.parent / "web" / "index.html").read_text(e
 
 @router.get("/admin")
 @router.get("/")
-async def admin_page():
+async def admin_page(username: str = Depends(verify_admin)):
     from starlette.responses import HTMLResponse
     return HTMLResponse(_ADMIN_HTML)
 
@@ -587,7 +588,7 @@ from datetime import datetime as _dt
 
 
 @router.get("/api/accounts")
-async def list_accounts():
+async def list_accounts(username: str = Depends(verify_admin)):
     accounts = []
     for acc in config_manager.config.mimo_accounts:
         token = acc.service_token
@@ -603,7 +604,7 @@ async def list_accounts():
 
 
 @router.post("/api/account/import-cookie")
-async def import_cookie(request: Request):
+async def import_cookie(request: Request, username: str = Depends(verify_admin)):
     try:
         data = await request.json()
     except Exception:
@@ -620,7 +621,7 @@ async def import_cookie(request: Request):
 
 
 @router.post("/api/account/import-curl")
-async def import_curl(request: Request):
+async def import_curl(request: Request, username: str = Depends(verify_admin)):
     try:
         data = await request.json()
     except Exception:
@@ -683,7 +684,7 @@ async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph:
 
 
 @router.delete("/api/accounts/{idx}")
-async def delete_account(idx: int):
+async def delete_account(idx: int, username: str = Depends(verify_admin)):
     accounts = config_manager.config.mimo_accounts
     if idx < 0 or idx >= len(accounts):
         raise HTTPException(404, "account not found")
@@ -693,7 +694,7 @@ async def delete_account(idx: int):
 
 
 @router.post("/api/accounts/{idx}/test")
-async def test_account(idx: int):
+async def test_account(idx: int, username: str = Depends(verify_admin)):
     accounts = config_manager.config.mimo_accounts
     if idx < 0 or idx >= len(accounts):
         raise HTTPException(404, "account not found")
@@ -722,12 +723,12 @@ async def test_account(idx: int):
 # ─── 旧版管理接口（保留兼容） ────────────────────────────────
 
 @router.get("/api/config")
-async def get_config():
+async def get_config(username: str = Depends(verify_admin)):
     return config_manager.get_config()
 
 
 @router.post("/api/config")
-async def update_config(request: Request):
+async def update_config(request: Request, username: str = Depends(verify_admin)):
     try:
         new_config = await request.json()
         config_manager.update_config(new_config)
@@ -737,7 +738,7 @@ async def update_config(request: Request):
 
 
 @router.post("/api/parse-curl")
-async def parse_curl_command(request: ParseCurlRequest):
+async def parse_curl_command(request: ParseCurlRequest, username: str = Depends(verify_admin)):
     account = parse_curl(request.curl)
     if not account:
         raise HTTPException(status_code=400, detail={"error": "parse failed"})
@@ -745,7 +746,7 @@ async def parse_curl_command(request: ParseCurlRequest):
 
 
 @router.post("/api/test-account")
-async def test_account_endpoint(request: TestAccountRequest):
+async def test_account_endpoint(request: TestAccountRequest, username: str = Depends(verify_admin)):
     try:
         account = MimoAccount(
             service_token=request.service_token,
@@ -762,7 +763,7 @@ async def test_account_endpoint(request: TestAccountRequest):
 # ─── 用量统计 API ─────────────────────────────────────────────
 
 @router.get("/api/usage")
-async def usage_stats():
+async def usage_stats(username: str = Depends(verify_admin)):
     """返回用量统计：按模型分组 + 全部汇总。"""
     return _get_usage()
 
@@ -775,7 +776,7 @@ async def clear_usage():
 
 
 @router.post("/api/cleanup")
-async def manual_cleanup():
+async def manual_cleanup(username: str = Depends(verify_admin)):
     """手动触发过期会话清理。"""
     try:
         expired = _get_expired_sessions()
