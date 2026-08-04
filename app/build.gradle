@@ -1,0 +1,75 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.mimo2api.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.mimo2api.app"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        python {
+            version "3.11"
+            buildPython "C:/Users/Administrator/AppData/Local/Programs/Python/Python311/python.exe"
+
+            pip {
+                install "fastapi==0.115.5"
+                install "uvicorn==0.32.1"
+                install "httpx==0.27.2"
+                install "pydantic<2"
+                install "python-multipart==0.0.20"
+            }
+
+            pyc {
+                src false
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('../release.keystore')
+            storePassword 'mimo2api123'
+            keyAlias 'mimo2api'
+            keyPassword 'mimo2api123'
+        }
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'com.google.android.material:material:1.12.0'
+}

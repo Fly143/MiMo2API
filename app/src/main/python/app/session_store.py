@@ -14,7 +14,8 @@ import time
 import uuid
 from pathlib import Path
 
-SESSION_FILE = Path(__file__).parent.parent / "sessions.json"
+import os as _os
+SESSION_FILE = Path(_os.environ.get("MIMO_DATA_DIR", str(Path(__file__).parent.parent))) / "sessions.json"
 
 # token 超限后强制清屏（MiMo 上下文 ~128K，留余量）
 TOKEN_THRESHOLD = 150000

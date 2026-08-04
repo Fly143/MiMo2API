@@ -1,8 +1,17 @@
+# Android 构建产物
+app/build/
+build/
+.gradle/
+local.properties
+*.iml
+.idea/
+
+# 敏感文件（签名密钥、真实配置）
+*.keystore
 config.json
-__pycache__/
-*.pyc
+token.json
+usage.json
 sessions.json
-usage.json
-app/responses.json
-test_tts.wav
-usage.json
+responses.json
+*.pyc
+__pycache__/
