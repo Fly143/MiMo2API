@@ -383,6 +383,7 @@ def build_query_from_messages(
     messages: list,
     tools: list = None,
     passthrough: bool = False,
+    continuation: bool = False,
 ) -> str:
     """从消息列表构建查询字符串。
 
@@ -391,12 +392,17 @@ def build_query_from_messages(
     工具提示词嵌入 system 消息一次，不再每轮重复注入。
     无 system 消息但有 tools 时自动补 system。
     passthrough=True 时跳过 MiMoML 格式说明书，直接嵌入原始工具定义。
+
+    continuation=True 时只发 system + tools + 最后一条 user 消息，
+    跳过历史对话（MiMo 服务端通过 conversationId 已有上下文）。
     """
     from .tool_call import build_tool_prompt
 
     query_parts = []
     system_text = ""
 
+    # 分离 system 消息和其他消息
+    non_system_msgs = []
     for msg in messages:
         role = msg.role
         content = msg.content or ""
@@ -410,6 +416,22 @@ def build_query_from_messages(
                 content = " ".join(text_parts)
             system_text = str(content).strip()
             continue
+
+        non_system_msgs.append(msg)
+
+    # continuation 模式：只取最后一条 user 消息
+    if continuation and non_system_msgs:
+        last_user = None
+        for msg in reversed(non_system_msgs):
+            if msg.role == "user":
+                last_user = msg
+                break
+        if last_user:
+            non_system_msgs = [last_user]
+
+    for msg in non_system_msgs:
+        role = msg.role
+        content = msg.content or ""
 
         if isinstance(content, list):
             text_parts = []
@@ -442,4 +464,141 @@ def build_query_from_messages(
     if system_text:
         query_parts.insert(0, f"system: {system_text}")
 
-    return "\n".join(query_parts)
+    full_query = "\n".join(query_parts)
+
+    # === 长度保护：MiMo bot/chat 对单条 query 有 ~100KB 字符上限，
+    # 超出会被服务端直接拒绝（"text you sent is too long"）。
+    # continuation 模式下只发增量，通常远低于限制。
+    # 非 continuation 模式下采用滑动窗口：保留 system，从尾部裁剪历史。
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "95000"))
+    if len(full_query) > MAX_QUERY_CHARS:
+        system_prefix = ""
+        history_parts = query_parts
+        if system_text:
+            system_prefix = f"system: {system_text}\n"
+            history_parts = query_parts[1:]  # 去掉 system 行
+
+        kept = []
+        used = len(system_prefix)
+        for part in reversed(history_parts):
+            part_len = len(part) + 1  # +1 是换行符
+            if used + part_len > MAX_QUERY_CHARS and kept:
+                break
+            kept.insert(0, part)
+            used += part_len
+
+        full_query = system_prefix + "\n".join(kept)
+        print(
+            f"[QueryGuard] MiMo query exceeded {MAX_QUERY_CHARS} chars, "
+            f"kept system + last {len(kept)} history parts "
+            f"(final {len(full_query)} chars). Older history was truncated."
+        )
+
+    return full_query
+
+
+def build_chunked_queries(
+    messages: list,
+    tools: list = None,
+    passthrough: bool = False,
+) -> list:
+    """当全量 query 超限时，按消息边界拆分成多个 chunk。
+
+    每个 chunk 包含 system + tools + 一部分历史消息，均在限制内。
+    调用方按顺序发送 chunk，MiMo 通过 conversationId 累积上下文。
+    最后一个 chunk 包含最新的 user 消息（触发模型回复）。
+
+    Returns:
+        [query_str, ...] — 如果不需要拆分则返回 [full_query]（单元素列表）
+    """
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "95000"))
+
+    from .tool_call import build_tool_prompt
+
+    # 提取 system 和 tool prompt
+    system_text = ""
+    non_system_msgs = []
+    for msg in messages:
+        if msg.role == "system":
+            content = msg.content or ""
+            if isinstance(content, list):
+                text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
+                content = " ".join(text_parts)
+            system_text = str(content).strip()
+        else:
+            non_system_msgs.append(msg)
+
+    if tools:
+        tool_prompt = build_tool_prompt(tools, passthrough=passthrough)
+        if tool_prompt:
+            system_text = (system_text + "\n\n" + tool_prompt).strip() if system_text else tool_prompt
+
+    system_prefix = f"system: {system_text}\n" if system_text else ""
+    sys_len = len(system_prefix)
+
+    # 先试整体构建
+    full_query = build_query_from_messages(messages, tools=tools, passthrough=passthrough)
+    if len(full_query) <= MAX_QUERY_CHARS:
+        return [full_query]
+
+    # 需要拆分：把 non_system_msgs 转成 "role: content" 字符串列表
+    msg_strs = []
+    for msg in non_system_msgs:
+        content = msg.content or ""
+        if isinstance(content, list):
+            text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
+            content = " ".join(text_parts)
+        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+            content = _serialize_tool_calls(msg.tool_calls)
+        if msg.role == "tool":
+            tool_call_id = getattr(msg, 'tool_call_id', '') or ''
+            clean = __import__('re').sub(r'\[TOOL_RESULT\]\s*', '', content, flags=__import__('re').IGNORECASE).strip()
+            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
+        msg_strs.append(f"{msg.role}: {content}")
+
+    # 按消息边界拆分
+    available = MAX_QUERY_CHARS - sys_len - 1  # -1 for newline after system
+    chunks = []
+    current_parts = []
+    current_len = 0
+
+    for ms in msg_strs:
+        part_len = len(ms) + 1  # +1 for \n
+        if part_len > available:
+            # 单条消息本身就超限 → 按字符拆成多段
+            # 先把已有的 parts 存起来
+            if current_parts:
+                chunks.append(system_prefix + "\n".join(current_parts))
+                current_parts = []
+                current_len = 0
+            # 拆分这条超长消息
+            role_prefix = ms.split(": ", 1)[0] + ": " if ": " in ms else ""
+            body = ms[len(role_prefix):]
+            suffix = "\n\n（内容未完，请不要回复，等待后续内容）"
+            chunk_budget = available - len(role_prefix) - len(suffix) - 1
+            pos = 0
+            while pos < len(body):
+                segment = body[pos:pos + chunk_budget]
+                if pos + chunk_budget < len(body):
+                    # 非最后一段，加提示让模型不要回复
+                    chunks.append(system_prefix + role_prefix + segment + suffix)
+                else:
+                    # 最后一段，正常发送
+                    current_parts.append(role_prefix + segment)
+                    current_len = len(role_prefix) + len(segment) + 1
+                pos += chunk_budget
+        elif current_parts and current_len + part_len > available:
+            # 当前 chunk 满了，保存并开始新 chunk
+            chunks.append(system_prefix + "\n".join(current_parts))
+            current_parts = [ms]
+            current_len = part_len
+        else:
+            current_parts.append(ms)
+            current_len += part_len
+
+    if current_parts:
+        chunks.append(system_prefix + "\n".join(current_parts))
+
+    final = [c for c in chunks if c.strip()]
+    print(f"[QueryGuard] Query split into {len(final)} chunks: {[len(c) for c in final]} chars")
+    return final

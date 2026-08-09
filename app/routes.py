@@ -20,7 +20,7 @@ from .models import (
 )
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
-from .utils import parse_curl, build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 from .tool_sieve import StreamSieve
 from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
@@ -478,7 +478,6 @@ async def chat_completions(
 
     # 构建查询
     passthrough_mode = request.passthrough or config_manager.config.tools_passthrough
-    query = build_query_from_messages(request.messages, tools=tools_dict, passthrough=passthrough_mode)
 
     thinking = bool(request.reasoning_effort)
     client = MimoClient(account)
@@ -489,6 +488,26 @@ async def chat_completions(
     )
     # 立即用当前消息更新指纹（对新会话：设置初值；对已有会话：更新续接后的指纹）
     _update_session_fingerprint(account.user_id, conv_id, request.messages)
+
+    # 续接会话时只发增量消息（MiMo 服务端已有 conversationId 上下文）
+    # 新会话时构建全量 query，超长则拆分成多个 chunk
+    if conv_is_new:
+        chunks = build_chunked_queries(
+            request.messages, tools=tools_dict, passthrough=passthrough_mode
+        )
+        query = chunks[-1]  # 最后一个 chunk 用于获取回复
+        # 前面的 chunk 先发给 MiMo 让服务端累积上下文
+        for warmup_query in chunks[:-1]:
+            try:
+                await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
+                print(f"[QueryGuard] Sent warmup chunk ({len(warmup_query)} chars) to conv {conv_id[:8]}")
+            except Exception as e:
+                print(f"[QueryGuard] Warmup chunk failed: {e}")
+    else:
+        query = build_query_from_messages(
+            request.messages, tools=tools_dict, passthrough=passthrough_mode,
+            continuation=True
+        )
 
     # 流式响应
     if request.stream:
