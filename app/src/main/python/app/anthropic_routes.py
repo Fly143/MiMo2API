@@ -42,7 +42,7 @@ from .batch import init_batch_storage as _anthropic_init_batch_storage
 from .mimo_client import MimoClient, MimoApiError
 from .config import config_manager
 from .models import OpenAIMessage
-from .utils import build_query_from_messages, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, get_tool_names, clean_tool_text
 from .session_store import (
     get_or_create_session as _get_or_create_session,
@@ -434,7 +434,6 @@ async def anthropic_messages(
             msgs_as_objects.append(m)
 
     tools_dict = openai_tools
-    query = build_query_from_messages(msgs_as_objects, tools=tools_dict)
 
     # ── 提取并上传图片/文件 ──
     query_text, base64_medias, text_files, processed_msgs = extract_medias_from_messages(msgs_as_objects)
@@ -491,10 +490,28 @@ async def anthropic_messages(
         account.user_id, msgs_as_objects, model,
     )
 
+    # 续接会话时只发增量消息（MiMo 服务端已有 conversationId 上下文）
+    # 新会话时构建全量 query，超长则拆分成多个 chunk
+    client = MimoClient(account)
+    if conv_is_new:
+        chunks = build_chunked_queries(
+            msgs_as_objects, tools=tools_dict
+        )
+        query = chunks[-1]
+        for warmup_query in chunks[:-1]:
+            try:
+                await client.call_api(warmup_query, False, model, conversation_id=conv_id)
+                print(f"[QueryGuard] Sent warmup chunk ({len(warmup_query)} chars) to conv {conv_id[:8]}")
+            except Exception as e:
+                print(f"[QueryGuard] Warmup chunk failed: {e}")
+    else:
+        query = build_query_from_messages(
+            msgs_as_objects, tools=tools_dict,
+            continuation=True
+        )
+
     # ── 工具名（用于后续提取） ──
     tool_names = get_tool_names(tools_dict) if tools_dict else None
-
-    client = MimoClient(account)
 
     # ═══════════════════════════════════════════════════════════
     # 流式
