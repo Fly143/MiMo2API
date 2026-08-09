@@ -384,6 +384,7 @@ def build_query_from_messages(
     tools: list = None,
     passthrough: bool = False,
     continuation: bool = False,
+    no_truncate: bool = False,
 ) -> str:
     """从消息列表构建查询字符串。
 
@@ -471,7 +472,7 @@ def build_query_from_messages(
     # continuation 模式下只发增量，通常远低于限制。
     # 非 continuation 模式下采用滑动窗口：保留 system，从尾部裁剪历史。
     MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "95000"))
-    if len(full_query) > MAX_QUERY_CHARS:
+    if not no_truncate and len(full_query) > MAX_QUERY_CHARS:
         system_prefix = ""
         history_parts = query_parts
         if system_text:
@@ -536,8 +537,8 @@ def build_chunked_queries(
     system_prefix = f"system: {system_text}\n" if system_text else ""
     sys_len = len(system_prefix)
 
-    # 先试整体构建
-    full_query = build_query_from_messages(messages, tools=tools, passthrough=passthrough)
+    # 先试整体构建（不做截断，让 build_chunked_queries 自己拆分）
+    full_query = build_query_from_messages(messages, tools=tools, passthrough=passthrough, no_truncate=True)
     if len(full_query) <= MAX_QUERY_CHARS:
         return [full_query]
 
