@@ -17,7 +17,7 @@ import com.chaquo.python.android.AndroidPlatform;
 public class ServerService extends Service {
     private static final String TAG = "MiMo2API";
     private static final String CHANNEL_ID = "mimo2api_server";
-    public static final int PORT = 8000;
+    public static final int PORT = 8080;
     private static volatile boolean sStarted = false;
 
     public static boolean isStarted() { return sStarted; }

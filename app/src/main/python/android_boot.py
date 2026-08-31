@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 
 _server_thread = None
-_state = {"running": False, "port": 8000, "error": None}
+_state = {"running": False, "port": 8080, "error": None}
 
 
 def _ensure_config(data_dir: Path):
@@ -34,7 +34,7 @@ def _ensure_config(data_dir: Path):
     return cfg
 
 
-def start(data_dir: str, port: int = 8000):
+def start(data_dir: str, port: int = 8080):
     """由 Java 侧调用。data_dir = context.getFilesDir()。"""
     global _server_thread
     if _state["running"]:
