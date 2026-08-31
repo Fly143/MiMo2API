@@ -138,7 +138,8 @@ class ConfigManager:
                 admin_password=new_config.get('admin_password', 'admin'),
                 mimo_accounts=accounts,
                 models=new_config.get('models', []),
-                tools_passthrough=new_config.get('tools_passthrough', False)
+                tools_passthrough=new_config.get('tools_passthrough', False),
+                compression_mode=new_config.get('compression_mode', 'truncation')
             )
             self.save()
 
