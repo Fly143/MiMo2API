@@ -303,8 +303,8 @@
 
     <script>
 var _lang=localStorage.getItem('mimo_lang')||'zh';
-var _I={zh:{"curl":"cURL","cookie":"Cookie","accounts":"账号","apikey":"API Key","usage":"用量统计","parseCurl":"解析 cURL","parseFill":"解析填充 ↓","saveAcct":"保存账号","verifyBtn":"验证中...","saved":"已保存","saveFail":"保存失败","reqFail":"请求失败","refresh":"刷新","testAll":"测试全部","cleanupSessions":"清理过期会话","noAccts":"暂无配置账号","valid":"✅ 有效","notVerified":"⚪ 未验证","test":"测试","delete":"删除","loadFail":"加载失败","testing":"测试中...","testFail":"测试失败","noAcctTest":"无账号可测试","allTestDone":"有效","cleanup":"清理中...","cleanupFail":"清理失败: ","unknown":"未知","deleteConfirm":"确定删除此账号？","deleted":"已删除","deleteFail":"删除失败","usageNoData":"暂无用量数据","usageModel":"模型","usageReqs":"请求","usageInput":"输入","usageOutput":"输出","usageTotal":"总计","usageSum":"📋 合计","usageLoadFail":"加载失败: ","periodAll":"全部","periodWeek":"本周","periodToday":"今日","clearConfirm":"确定清空全部用量数据？此操作不可撤销。","cleared":"已清空","clearFail":"清空失败","configSaved":"配置已保存","saveConfigFail":"保存失败","parseFail":"解析失败，请检查 cURL 格式","parsing":"解析中...","parseOk":"解析成功","testConn":"测试连接","addAcct":"添加账号","connOk":"连接成功: ","connFail":"连接失败: ","acctAdded":"账号已添加","pasteCurl":"请粘贴 cURL 命令","pasteCookie":"请粘贴 Cookie 字符串","fieldsRequired":"请填写所有字段","filledFields":"已填充","filledFields2":"个字段","filledFields3":"缺少","filledFields4":"个","noValidFields":"未识别到有效字段","apiKeysLabel":"多个 Key 用逗号分隔","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"保存配置","mimoDesc":"小米 MiMo 模型 OpenAI 兼容 API","keysSaved":"配置已保存","saving":"保存中...","passthroughLabel":"工具透传模式","passthroughHint":"跳过格式说明书，直接嵌入原始工具定义（适合 Roo Code / Cline）","adminPwdLabel":"管理员密码","adminPwdPH":"默认 admin，修改后刷新需重新登录","compressModeLabel":"上下文压缩模式","compressModeHint":"开启=LLM摘要压缩（保留关键信息），关闭=滑动窗口裁剪（直接丢弃旧消息）。阈值均为80%。","howToGet":"如何获取？","step1":"登录 ","step2":"按 F12 → Network 标签","step3":"发一条消息，找到 ","step4":"右键 → Copy as cURL，粘贴到下方","cookieHint":"从浏览器 Cookie 中获取以下三个值：","cookiePH":"粘贴整段 Cookie，如: serviceToken=\"xxx\"; userId=\"123\"; xiaomichatbot_ph=\"abc\"","pasteOrFill":"粘贴或从上方自动填充","refresh2":"刷新","clearUsage":"清空","cookiePH2":"粘贴整段 Cookie，如: serviceToken=\"xxx\"; userId=123; xiaomichatbot_ph=\"yyy\"","pasteST":"粘贴 serviceToken","pasteUID":"粘贴 userId","pastePH":"粘贴 xiaomichatbot_ph"},
-en:{"curl":"cURL","cookie":"Cookie","accounts":"Accounts","apikey":"API Key","usage":"Usage","parseCurl":"Parse cURL","parseFill":"Parse & Fill ↓","saveAcct":"Save Account","verifyBtn":"Verifying...","saved":"Saved","saveFail":"Save Failed","reqFail":"Request Failed","refresh":"Refresh","testAll":"Test All","cleanupSessions":"Cleanup Old Sessions","noAccts":"No accounts configured","valid":"✅ Active","notVerified":"⚪ Not Verified","test":"Test","delete":"Delete","loadFail":"Load Failed","testing":"Testing...","testFail":"Test Failed","noAcctTest":"No accounts to test","allTestDone":"valid","cleanup":"Cleaning...","cleanupFail":"Cleanup failed: ","unknown":"unknown","deleteConfirm":"Delete this account?","deleted":"Deleted","deleteFail":"Delete Failed","usageNoData":"No usage data","usageModel":"Model","usageReqs":"Requests","usageInput":"Input","usageOutput":"Output","usageTotal":"Total","usageSum":"📋 Total","usageLoadFail":"Load failed: ","periodAll":"All","periodWeek":"This Week","periodToday":"Today","clearConfirm":"Clear all usage data? This cannot be undone.","cleared":"Cleared","clearFail":"Clear failed","configSaved":"Config saved","saveConfigFail":"Save failed","parseFail":"Parse failed, check cURL format","parsing":"Parsing...","parseOk":"Parsed","testConn":"Test Connection","addAcct":"Add Account","connOk":"Connected: ","connFail":"Connection failed: ","acctAdded":"Account added","pasteCurl":"Please paste cURL command","pasteCookie":"Please paste Cookie string","fieldsRequired":"Please fill all fields","filledFields":"Filled","filledFields2":"field(s)","filledFields3":"missing","filledFields4":"","noValidFields":"No valid fields found","apiKeysLabel":"Separate multiple keys with commas","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"Save Config","mimoDesc":"Xiaomi MiMo OpenAI-compatible API","keysSaved":"Config saved","saving":"Saving...","passthroughLabel":"Tool Passthrough Mode","passthroughHint":"Skip format instructions, embed raw tool definitions (suitable for Roo Code / Cline)","adminPwdLabel":"Admin Password","adminPwdPH":"Default admin, refresh to re-login after change","compressModeLabel":"Context Compression Mode","compressModeHint":"ON=LLM summary compression (preserves key info), OFF=sliding window truncation (drops old messages). Both trigger at 80% threshold.","howToGet":"How to get?","step1":"Login ","step2":"Press F12 → Network tab","step3":"Send a message, find the ","step4":"Right-click → Copy as cURL, paste below","cookieHint":"Get these 3 values from browser Cookies:","cookiePH":"Paste full cookie, e.g: serviceToken=\"xxx\"; userId=\"123\"; xiaomichatbot_ph=\"abc\"","pasteOrFill":"Paste or auto-fill from above","refresh2":"Refresh","clearUsage":"Clear","cookiePH2":"Paste full cookie, e.g: serviceToken=\"xxx\"; userId=123; xiaomichatbot_ph=\"yyy\"","pasteST":"Paste serviceToken","pasteUID":"Paste userId","pastePH":"Paste xiaomichatbot_ph"}};
+var _I={zh:{"curl":"cURL","cookie":"Cookie","accounts":"账号","apikey":"API Key","usage":"用量统计","parseCurl":"解析 cURL","parseFill":"解析填充 ↓","saveAcct":"保存账号","verifyBtn":"验证中...","saved":"已保存","saveFail":"保存失败","reqFail":"请求失败","refresh":"刷新","testAll":"测试全部","cleanupSessions":"清理过期会话","noAccts":"暂无配置账号","valid":"✅ 有效","notVerified":"⚪ 未验证","test":"测试","delete":"删除","loadFail":"加载失败","testing":"测试中...","testFail":"测试失败","noAcctTest":"无账号可测试","allTestDone":"有效","cleanup":"清理中...","cleanupFail":"清理失败: ","unknown":"未知","deleteConfirm":"确定删除此账号？","deleted":"已删除","deleteFail":"删除失败","usageNoData":"暂无用量数据","usageModel":"模型","usageReqs":"请求","usageInput":"输入","usageOutput":"输出","usageTotal":"总计","usageSum":"📋 合计","usageLoadFail":"加载失败: ","periodAll":"全部","periodWeek":"本周","periodToday":"今日","clearConfirm":"确定清空全部用量数据？此操作不可撤销。","cleared":"已清空","clearFail":"清空失败","configSaved":"配置已保存","saveConfigFail":"保存失败","parseFail":"解析失败，请检查 cURL 格式","parsing":"解析中...","parseOk":"解析成功","testConn":"测试连接","addAcct":"添加账号","connOk":"连接成功: ","connFail":"连接失败: ","acctAdded":"账号已添加","pasteCurl":"请粘贴 cURL 命令","pasteCookie":"请粘贴 Cookie 字符串","fieldsRequired":"请填写所有字段","filledFields":"已填充","filledFields2":"个字段","filledFields3":"缺少","filledFields4":"个","noValidFields":"未识别到有效字段","apiKeysLabel":"多个 Key 用逗号分隔","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"保存配置","mimoDesc":"小米 MiMo 模型 OpenAI 兼容 API","keysSaved":"配置已保存","saving":"保存中...","passthroughLabel":"工具透传模式","passthroughHint":"跳过格式说明书，直接嵌入原始工具定义（适合 Roo Code / Cline）","adminPwdLabel":"管理员密码","adminPwdPH":"默认 admin，修改后刷新需重新登录","compressModeLabel":"上下文压缩模式","compressModeHint":"开启=LLM摘要压缩（保留关键信息），关闭=滑动窗口裁剪（直接丢弃旧消息）。阈值均为80%。","howToGet":"如何获取？","step1":"登录 ","step2":"按 F12 → Network 标签","step3":"发一条消息，找到 ","step4":"右键 → Copy as cURL，粘贴到下方","cookieHint":"从浏览器 Cookie 中获取以下三个值：","cookiePH":"粘贴整段 Cookie，如: serviceToken=\"xxx\"; userId=\"123\"; xiaomichatbot_ph=\"abc\"","pasteOrFill":"粘贴或从上方自动填充","refresh2":"刷新","clearUsage":"清空","cookiePH2":"粘贴整段 Cookie，如: serviceToken=\"xxx\"; userId=123; xiaomichatbot_ph=\"yyy\"","pasteST":"粘贴 serviceToken","pasteUID":"粘贴 userId","pastePH":"粘贴 xiaomichatbot_ph","parseFailMsg":"解析失败，请检查 cURL 格式","parseOkMsg":"解析成功","testConnBtn":"测试连接","addAcctBtn":"添加账号","reqFailMsg":"请求失败","connOkMsg":"连接成功: ","connFailMsg":"连接失败: ","filledMsg":"已填充 ","filledMsg2":" 个字段","filledMsg3":"（缺少 ","filledMsg4":" 个）","noValidFieldsMsg":"未识别到有效字段","fieldsRequiredMsg":"请填写所有字段","saveFailMsg":"保存失败","noAcctsMsg":"暂无配置账号","loadFailMsg":"加载失败","testingMsg":"测试中...","validMsg":"✅ 有效: ","cleanupFailMsg":"清理失败: ","noDataMsg":"暂无用量数据","clearFailMsg":"清空失败: ","allValidMsg":" 有效","testingBtn":"测试","deleteBtn":"删除","unknown":"未知"},
+en:{"curl":"cURL","cookie":"Cookie","accounts":"Accounts","apikey":"API Key","usage":"Usage","parseCurl":"Parse cURL","parseFill":"Parse & Fill ↓","saveAcct":"Save Account","verifyBtn":"Verifying...","saved":"Saved","saveFail":"Save Failed","reqFail":"Request Failed","refresh":"Refresh","testAll":"Test All","cleanupSessions":"Cleanup Old Sessions","noAccts":"No accounts configured","valid":"✅ Active","notVerified":"⚪ Not Verified","test":"Test","delete":"Delete","loadFail":"Load Failed","testing":"Testing...","testFail":"Test Failed","noAcctTest":"No accounts to test","allTestDone":"valid","cleanup":"Cleaning...","cleanupFail":"Cleanup failed: ","unknown":"unknown","deleteConfirm":"Delete this account?","deleted":"Deleted","deleteFail":"Delete Failed","usageNoData":"No usage data","usageModel":"Model","usageReqs":"Requests","usageInput":"Input","usageOutput":"Output","usageTotal":"Total","usageSum":"📋 Total","usageLoadFail":"Load failed: ","periodAll":"All","periodWeek":"This Week","periodToday":"Today","clearConfirm":"Clear all usage data? This cannot be undone.","cleared":"Cleared","clearFail":"Clear failed","configSaved":"Config saved","saveConfigFail":"Save failed","parseFail":"Parse failed, check cURL format","parsing":"Parsing...","parseOk":"Parsed","testConn":"Test Connection","addAcct":"Add Account","connOk":"Connected: ","connFail":"Connection failed: ","acctAdded":"Account added","pasteCurl":"Please paste cURL command","pasteCookie":"Please paste Cookie string","fieldsRequired":"Please fill all fields","filledFields":"Filled","filledFields2":"field(s)","filledFields3":"missing","filledFields4":"","noValidFields":"No valid fields found","apiKeysLabel":"Separate multiple keys with commas","apiKeysPH":"sk-key1, sk-key2, sk-key3","saveConfig":"Save Config","mimoDesc":"Xiaomi MiMo OpenAI-compatible API","keysSaved":"Config saved","saving":"Saving...","passthroughLabel":"Tool Passthrough Mode","passthroughHint":"Skip format instructions, embed raw tool definitions (suitable for Roo Code / Cline)","adminPwdLabel":"Admin Password","adminPwdPH":"Default admin, refresh to re-login after change","compressModeLabel":"Context Compression Mode","compressModeHint":"ON=LLM summary compression (preserves key info), OFF=sliding window truncation (drops old messages). Both trigger at 80% threshold.","howToGet":"How to get?","step1":"Login ","step2":"Press F12 → Network tab","step3":"Send a message, find the ","step4":"Right-click → Copy as cURL, paste below","cookieHint":"Get these 3 values from browser Cookies:","cookiePH":"Paste full cookie, e.g: serviceToken=\"xxx\"; userId=\"123\"; xiaomichatbot_ph=\"abc\"","pasteOrFill":"Paste or auto-fill from above","refresh2":"Refresh","clearUsage":"Clear","cookiePH2":"Paste full cookie, e.g: serviceToken=\"xxx\"; userId=123; xiaomichatbot_ph=\"yyy\"","pasteST":"Paste serviceToken","pasteUID":"Paste userId","pastePH":"Paste xiaomichatbot_ph","parseFailMsg":"Parse failed, check cURL format","parseOkMsg":"Parsed","testConnBtn":"Test Connection","addAcctBtn":"Add Account","reqFailMsg":"Request failed","connOkMsg":"Connected: ","connFailMsg":"Connection failed: ","filledMsg":"Filled ","filledMsg2":" field(s)","filledMsg3":" (missing ","filledMsg4":")","noValidFieldsMsg":"No valid fields found","fieldsRequiredMsg":"Please fill all fields","saveFailMsg":"Save failed","noAcctsMsg":"No accounts configured","loadFailMsg":"Load failed","testingMsg":"Testing...","validMsg":"✅ Active: ","cleanupFailMsg":"Cleanup failed: ","noDataMsg":"No usage data","clearFailMsg":"Clear failed: ","allValidMsg":" valid","testingBtn":"Test","deleteBtn":"Delete","unknown":"unknown"}};
 function _(k){return (_I[_lang]||_I.zh)[k]||k}
 function toggleLang(){_lang=_lang==='zh'?'en':'zh';localStorage.setItem('mimo_lang',_lang);$id('langBtn').textContent=_lang==='zh'?'🌐 EN':'🌐 中';applyI18n()}
 function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(function(el){var k=el.getAttribute('data-i18n');if(k)el.textContent=_(k)});document.querySelectorAll('[data-i18n-ph]').forEach(function(el){var k=el.getAttribute('data-i18n-ph');if(k)el.placeholder=_(k)});document.querySelector('.header p').textContent=_('mimoDesc');var tabs=document.querySelectorAll('.tab');var tkeys=['curl','cookie','accounts','apikey','usage'];for(var i=0;i<5&&i<tabs.length;i++)tabs[i].textContent=_(tkeys[i])}
@@ -374,17 +374,17 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ curl })
                 });
-                if (!r.ok) { showStatus('curlResult', 'err', '解析失败，请检查 cURL 格式'); return; }
+                if (!r.ok) { showStatus('curlResult', 'err', _('parseFailMsg')); return; }
                 parsed = await r.json();
                 $id('curlResult').innerHTML = `
-                    <div class="status ok">解析成功 — ID: ${parsed.user_id}</div>
+                    <div class="status ok">${_("parseOkMsg")} — ID: ${parsed.user_id}</div>
                     <div class="btn-group">
-                        <button class="btn-outline" onclick="testParsed()">测试连接</button>
-                        <button class="btn-success" onclick="saveParsed()">添加账号</button>
+                        <button class="btn-outline" onclick="testParsed()">${_("testConnBtn")}</button>
+                        <button class="btn-success" onclick="saveParsed()">${_("addAcctBtn")}</button>
                     </div>
                     <div id="testResult"></div>
                 `;
-            } catch (e) { showStatus('curlResult', 'err', '请求失败: ' + e.message); }
+            } catch (e) { showStatus('curlResult', 'err', _('reqFailMsg') + ': ' + e.message); }
         }
 
         async function testParsed() {
@@ -397,9 +397,9 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                     body: JSON.stringify(parsed)
                 });
                 const d = await r.json();
-                if (d.success) showStatus('testResult', 'ok', '连接成功: ' + d.response.slice(0, 60));
-                else showStatus('testResult', 'err', '连接失败: ' + d.error);
-            } catch (e) { showStatus('testResult', 'err', '请求失败'); }
+                if (d.success) showStatus('testResult', 'ok', _('connOkMsg') + d.response.slice(0, 60));
+                else showStatus('testResult', 'err', _('connFailMsg') + d.error);
+            } catch (e) { showStatus('testResult', 'err', _('reqFailMsg')); }
         }
 
         async function saveParsed() {
@@ -446,9 +446,9 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             if (map.userId) $id('c-uid').value = map.userId;
             if (map.xiaomichatbot_ph) $id('c-ph').value = map.xiaomichatbot_ph;
             const filled = [map.serviceToken, map.userId, map.xiaomichatbot_ph].filter(Boolean).length;
-            if (filled >= 3) { toast('已填充 ' + filled + ' 个字段'); }
-            else if (filled > 0) { toast('已填充 ' + filled + ' 个字段（缺少 ' + (3 - filled) + ' 个）', true); }
-            else { toast('未识别到有效字段', true); }
+            if (filled >= 3) { toast(_('filledMsg') + filled + _('filledMsg2')); }
+            else if (filled > 0) { toast(_('filledMsg') + filled + _('filledMsg2') + _('filledMsg3') + (3 - filled) + _('filledMsg4'), true); }
+            else { toast(_('noValidFieldsMsg'), true); }
         }
 
         // === Cookie 手动保存 ===
@@ -456,7 +456,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             const st = $id('c-st').value.trim();
             const uid = $id('c-uid').value.trim();
             const ph = $id('c-ph').value.trim();
-            if (!st || !uid || !ph) { toast('请填写所有字段', true); return; }
+            if (!st || !uid || !ph) { toast(_('fieldsRequiredMsg'), true); return; }
             const btn = $id('btn-save-cookie');
             btn.disabled = true; btn.textContent = _('verifyBtn');
             try {
@@ -471,7 +471,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                     $id('c-st').value = ''; $id('c-uid').value = ''; $id('c-ph').value = '';
                     loadConfig();
                 } else {
-                    toast(d.error || '保存失败', true);
+                    toast(d.error || _('saveFailMsg'), true);
                 }
             } catch (e) { toast(_('reqFail'), true); }
             finally { btn.disabled = false; btn.textContent = _('saveAcct'); }
@@ -484,7 +484,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 const d = await r.json();
                 const el = $id('accounts');
                 if (!d.accounts || !d.accounts.length) {
-                    el.innerHTML = '<div class="empty">暂无配置账号</div>';
+                    el.innerHTML = '<div class="empty">'+_('noAcctsMsg')+'</div>';
                     return;
                 }
                 el.innerHTML = d.accounts.map((a, i) => `
@@ -497,24 +497,24 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                         </div>
                         <div class="info-line"><b>token:</b> <code>${a.token_masked}</code></div>
                         <div class="actions">
-                            <button class="btn-outline" onclick="testAcct(${i})">测试</button>
-                            <button class="btn-danger" onclick="delAcct(${i})">删除</button>
+                            <button class="btn-outline" onclick="testAcct(${i})">${_("testingBtn")}</button>
+                            <button class="btn-danger" onclick="delAcct(${i})">${_("deleteBtn")}</button>
                         </div>
                     </div>
                 `).join('');
             } catch (e) {
-                $id('accounts').innerHTML = '<div class="empty">加载失败</div>';
+                $id('accounts').innerHTML = '<div class="empty">'+_('loadFailMsg')+'</div>';
             }
         }
 
         async function testAcct(i) {
             const btn = event.target;
             btn.disabled = true;
-            btn.textContent = '测试中...';
+            btn.textContent = _('testingMsg');
             try {
                 const r = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
                 const d = await r.json();
-                toast(d.ok ? '✅ 有效: ' + (d.response || '').substring(0, 40) : '❌ ' + d.error, !d.ok);
+                toast(d.ok ? _('validMsg') + (d.response || '').substring(0, 40) : '❌ ' + d.error, !d.ok);
                 loadAccounts();
             } catch (e) { toast(_('testFail'), true); }
             btn.disabled = false;
@@ -524,21 +524,21 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
         async function testAll() {
             const btn = event.target;
             btn.disabled = true;
-            btn.textContent = '测试中...';
+            btn.textContent = _('testingMsg');
             try {
                 const r = await fetch('/api/accounts');
                 const d = await r.json();
                 if (!d.accounts || !d.accounts.length) { toast(_('noAcctTest'), true); btn.disabled = false; btn.textContent = _('testAll'); return; }
                 let ok = 0;
                 for (let i = 0; i < d.accounts.length; i++) {
-                    btn.textContent = '测试中...(' + (i + 1) + '/' + d.accounts.length + ')';
+                    btn.textContent = _('testingMsg') + '(' + (i + 1) + '/' + d.accounts.length + ')';
                     try {
                         const r2 = await fetch('/api/accounts/' + i + '/test', { method: 'POST' });
                         const d2 = await r2.json();
                         if (d2.ok) ok++;
                     } catch (e) {}
                 }
-                toast(ok + '/' + d.accounts.length + ' 有效');
+                toast(ok + '/' + d.accounts.length + _('allValidMsg'));
                 loadAccounts();
             } catch (e) { toast(_('reqFail'), true); }
             btn.disabled = false;
@@ -552,8 +552,8 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
             try {
                 const r = await fetch('/api/cleanup', { method: 'POST' });
                 const d = await r.json();
-                toast(d.ok ? d.msg : '清理失败: ' + (d.msg || '未知'), !d.ok);
-            } catch (e) { toast('清理失败: ' + e.message, true); }
+                toast(d.ok ? d.msg : _('cleanupFailMsg') + (d.msg || _('unknown')), !d.ok);
+            } catch (e) { toast(_('cleanupFailMsg') + e.message, true); }
             btn.disabled = false;
             btn.textContent = _('cleanupSessions');
         }
@@ -581,7 +581,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 let entries = Object.entries(models).sort((a, b) => b[1].total_tokens - a[1].total_tokens);
 
                 if (!entries.length && !total.requests) {
-                    $id('usageContent').innerHTML = '<div class="usage-empty"><div class="icon">📊</div>暂无用量数据</div>';
+                    $id('usageContent').innerHTML = '<div class="usage-empty"><div class="icon">📊</div>'+_('noDataMsg')+'</div>';
                     return;
                 }
 
@@ -607,7 +607,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 html += '</tbody></table></div>';
                 $id('usageContent').innerHTML = html;
             } catch (e) {
-                $id('usageContent').innerHTML = '<div class="usage-empty">加载失败: ' + e.message + '</div>';
+                $id('usageContent').innerHTML = '<div class="usage-empty">'+_('loadFailMsg')+': ' + e.message + '</div>';
             }
         }
         function switchPeriod(p) {
@@ -623,7 +623,7 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 const d = await r.json();
                 if (d.ok) { toast(_('cleared')); loadUsage(); }
                 else toast(_('clearFail'), true);
-            } catch (e) { toast('清空失败: ' + e.message, true); }
+            } catch (e) { toast(_('clearFailMsg') + e.message, true); }
         }
 
         // === 初始化 ===
