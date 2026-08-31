@@ -467,11 +467,11 @@ def build_query_from_messages(
 
     full_query = "\n".join(query_parts)
 
-    # === 长度保护：MiMo bot/chat 对单条 query 有 ~100KB 字符上限，
-    # 超出会被服务端直接拒绝（"text you sent is too long"）。
+    # === 长度保护：v2.5/v2.5-pro 上下文窗口 1M，实测单条 query 1M 字符仍 200（无 ~100KB 硬限）；
+    # 老模型（v2-flash 等）若服务端拒长文本，可调小 MIMO_MAX_QUERY_CHARS 环境变量覆盖。
     # continuation 模式下只发增量，通常远低于限制。
     # 非 continuation 模式下采用滑动窗口：保留 system，从尾部裁剪历史。
-    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "95000"))
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "1048576"))
     if not no_truncate and len(full_query) > MAX_QUERY_CHARS:
         system_prefix = ""
         history_parts = query_parts
@@ -512,7 +512,7 @@ def build_chunked_queries(
     Returns:
         [query_str, ...] — 如果不需要拆分则返回 [full_query]（单元素列表）
     """
-    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "95000"))
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "1048576"))
 
     from .tool_call import build_tool_prompt
 
