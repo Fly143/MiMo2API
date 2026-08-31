@@ -1,18 +1,19 @@
-"""上下文压缩器 — 对话超长时压缩中间历史为摘要，保留 head + tail。
+"""上下文压缩器 — 两种模式，回复后检测余量触发。
 
-算法（参考 Hermes 三段式）：
-1. 拆分消息为 head（system + 首轮）、middle（中间历史）、tail（最近 ~20K tokens）
-2. 调 LLM 将 middle 压缩为结构化摘要
-3. 摘要作为 system 消息注入 head 与 tail 之间
-4. 压缩后的消息列表送回 build_query_from_messages 构建最终 query
+模式 1（truncation）：滑动窗口裁剪，保留 head + tail，丢弃 middle
+模式 2（compress）：三段式 LLM 摘要，保留 head + tail + middle 摘要
+
+触发时机：模型回复后，检测消息总字符数 > 80% MAX_QUERY_CHARS
+尾部保留：按 token budget（~20K tokens ≈ 80K 字符）
 """
 
 import os
 from types import SimpleNamespace
 
 MAX_QUERY_CHARS = int(os.getenv("MIMO_MAX_QUERY_CHARS", "1048576"))
+COMPRESS_THRESHOLD = 0.80  # 80% 触发
 TAIL_TOKEN_BUDGET = 20000
-TAIL_CHAR_BUDGET = TAIL_TOKEN_BUDGET * 4  # 保守估算：1 token ≈ 4 字符（英文/混合）
+TAIL_CHAR_BUDGET = TAIL_TOKEN_BUDGET * 4  # ~80K 字符
 
 
 def estimate_chars(messages):
@@ -32,21 +33,23 @@ def estimate_chars(messages):
 
 
 def should_compress(messages):
-    """判断是否需要压缩"""
-    return estimate_chars(messages) > MAX_QUERY_CHARS
+    """判断是否需要压缩（80% 阈值）"""
+    return estimate_chars(messages) > MAX_QUERY_CHARS * COMPRESS_THRESHOLD
 
 
 def split_messages(messages):
     """
-    将消息拆分为 head、middle、 tail 三段。
-    
+    将消息拆分为 head、middle、tail 三段。
+    head: system + 第一条 user-assistant 交换
+    tail: 从尾部往前，按 token budget 保留
+    middle: 中间部分（将被裁剪或压缩）
+
     Returns:
         (head, middle, tail) — 三个消息列表
     """
     if not messages:
         return [], [], []
 
-    # 分离 system 和其他消息
     system_msgs = [m for m in messages if m.role == "system"]
     other_msgs = [m for m in messages if m.role != "system"]
 
@@ -62,7 +65,7 @@ def split_messages(messages):
             break
     head.extend(head_turns)
 
-    # tail: 从尾部往前，按字符预算保留
+    # tail: 从尾部往前，按 token budget 保留
     tail = []
     tail_chars = 0
     for msg in reversed(other_msgs):
@@ -86,6 +89,23 @@ def split_messages(messages):
     middle = [m for m in messages if id(m) not in head_ids and id(m) not in tail_ids]
 
     return head, middle, tail
+
+
+def truncate_messages(messages):
+    """
+    模式 1：滑动窗口裁剪。
+    保留 head + tail，丢弃 middle。
+    """
+    head, middle, tail = split_messages(messages)
+    if not middle:
+        return messages
+
+    result = head + tail
+    print(
+        f"[ContextCompressor:truncation] {len(messages)} 条 → {len(result)} 条 "
+        f"(丢弃 {len(middle)} 条 middle)"
+    )
+    return result
 
 
 def build_summary_prompt(messages):
@@ -118,13 +138,9 @@ def build_summary_prompt(messages):
 
 async def compress_messages(messages, model, client):
     """
-    压缩中间消息为摘要。
-    
-    Args:
-        messages: 消息列表
-        model: 模型名
-        client: MimoClient 实例
-    
+    模式 2：三段式 LLM 摘要。
+    调 LLM 将 middle 压缩为结构化摘要。
+
     Returns:
         (summary_text, compressed_messages) — 压缩后的摘要和消息列表。
         如果不需要压缩或失败，返回 (None, 原消息列表)。
@@ -134,19 +150,17 @@ async def compress_messages(messages, model, client):
     if not middle:
         return None, messages
 
-    # 调 LLM 生成摘要
     prompt = build_summary_prompt(middle)
 
     try:
         content, _, _ = await client.call_api(prompt, False, model)
     except Exception as e:
-        print(f"[ContextCompressor] 摘要调用失败，回退到截断模式: {e}")
-        return None, messages
+        print(f"[ContextCompressor:compress] 摘要调用失败，回退到截断: {e}")
+        return None, truncate_messages(messages)
 
     if not content:
-        return None, messages
+        return None, truncate_messages(messages)
 
-    # 构建摘要消息（作为 system 消息，会被 build_query_from_messages 合并到最前面）
     summary_msg = SimpleNamespace(
         role="system",
         content=f"[对话摘要] 原对话已压缩，请基于以下摘要继续对话：\n{content}",
@@ -154,7 +168,7 @@ async def compress_messages(messages, model, client):
 
     compressed = head + [summary_msg] + tail
     print(
-        f"[ContextCompressor] 压缩完成：{len(messages)} 条 → {len(compressed)} 条 "
+        f"[ContextCompressor:compress] {len(messages)} 条 → {len(compressed)} 条 "
         f"(middle {len(middle)} 条 → 摘要)"
     )
     return content, compressed

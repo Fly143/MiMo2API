@@ -31,6 +31,7 @@ class Config:
     mimo_accounts: List[MimoAccount] = None
     models: List[str] = None  # 自定义模型列表，None 表示自动探测
     tools_passthrough: bool = False  # 全局工具透传模式
+    compression_mode: str = "truncation"  # truncation=裁剪 | compress=LLM压缩
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -44,6 +45,7 @@ class Config:
             "admin_password": self.admin_password,
             "mimo_accounts": [acc.to_dict() for acc in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
+            "compression_mode": self.compression_mode,
         }
         if self.models:
             d["models"] = self.models
@@ -59,6 +61,7 @@ class Config:
                 for acc in self.mimo_accounts
             ],
             "tools_passthrough": self.tools_passthrough,
+            "compression_mode": self.compression_mode,
         }
         if self.models:
             d["models"] = self.models

@@ -21,7 +21,7 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
-from .context_compressor import compress_messages, should_compress
+from .context_compressor import compress_messages, truncate_messages, should_compress
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 from .tool_sieve import StreamSieve
 from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
@@ -491,7 +491,7 @@ async def chat_completions(
     _update_session_fingerprint(account.user_id, conv_id, request.messages)
 
     # 续接会话时只发增量消息（MiMo 服务端已有 conversationId 上下文）
-    # 新会话时构建全量 query，超长则压缩中间历史
+    # 新会话时构建全量 query，超长则根据模式裁剪或压缩
     needs_compression = conv_is_new and should_compress(request.messages)
 
     if not needs_compression:
@@ -499,8 +499,7 @@ async def chat_completions(
             chunks = build_chunked_queries(
                 request.messages, tools=tools_dict, passthrough=passthrough_mode
             )
-            query = chunks[-1]  # 最后一个 chunk 用于获取回复
-            # 前面的 chunk 先发给 MiMo 让服务端累积上下文
+            query = chunks[-1]
             for warmup_query in chunks[:-1]:
                 try:
                     await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
@@ -513,8 +512,25 @@ async def chat_completions(
                 continuation=True
             )
     else:
-        # 新会话且超长：标记需要压缩，流式响应内部先提示再压缩
-        query = None
+        # 新会话且超长：根据 compression_mode 选择处理方式
+        mode = config_manager.config.compression_mode
+        if mode == "compress":
+            # LLM 压缩模式：流式响应内部先提示再压缩
+            query = None
+        else:
+            # 裁剪模式：直接裁剪，不需要 LLM 调用
+            request.messages = truncate_messages(request.messages)
+            _update_session_fingerprint(account.user_id, conv_id, request.messages)
+            chunks = build_chunked_queries(
+                request.messages, tools=tools_dict, passthrough=passthrough_mode
+            )
+            query = chunks[-1]
+            for warmup_query in chunks[:-1]:
+                try:
+                    await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
+                except Exception as e:
+                    print(f"[QueryGuard] Warmup chunk failed: {e}")
+            needs_compression = False  # 已裁剪，不需要流式压缩
 
     # 流式响应
     if request.stream:
@@ -634,11 +650,16 @@ async def _stream_response(
     # 初始 role delta
     yield _build_chunk(msg_id, model, created=created_t, role="assistant")
 
-    # 压缩模式：先提示，再压缩，然后重建 query
+    # 压缩模式：先提示，再根据模式裁剪/压缩，然后重建 query
     if needs_compression and raw_messages:
-        yield _build_chunk(msg_id, model, created=created_t, content="正在压缩上下文，请稍候...")
-        print(f"[ContextCompressor] 开始压缩 {len(raw_messages)} 条消息")
-        _, compressed_msgs = await compress_messages(raw_messages, effective_model, client)
+        mode = "compress"  # 默认 LLM 压缩（裁剪模式已在 chat_completions 里处理）
+        if mode == "compress":
+            yield _build_chunk(msg_id, model, created=created_t, content="正在压缩上下文，请稍候...")
+            print(f"[ContextCompressor] 开始 LLM 压缩 {len(raw_messages)} 条消息")
+            _, compressed_msgs = await compress_messages(raw_messages, effective_model, client)
+        else:
+            yield _build_chunk(msg_id, model, created=created_t, content="正在裁剪上下文，请稍候...")
+            compressed_msgs = truncate_messages(raw_messages)
         chunks = build_chunked_queries(
             compressed_msgs, tools=raw_tools, passthrough=raw_passthrough
         )
@@ -648,7 +669,7 @@ async def _stream_response(
                 await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
             except Exception as e:
                 print(f"[QueryGuard] Warmup chunk failed: {e}")
-        yield _build_chunk(msg_id, model, created=created_t, content="压缩完成，正在生成回复...")
+        yield _build_chunk(msg_id, model, created=created_t, content="处理完成，正在生成回复...")
 
     has_tools = tools is not None
 
@@ -1868,13 +1889,17 @@ async def _do_response_chat(body: dict, account) -> tuple:
     # 构建 tools dict
     tools_dict = [dict(t) if hasattr(t, 'dict') else t for t in tools] if tools else None
 
-    # 构建查询
+    # 构建查询（超长则根据模式裁剪/压缩）
+    client = MimoClient(account)
+    if should_compress(openai_messages):
+        mode = config_manager.config.compression_mode
+        if mode == "compress":
+            _, openai_messages = await compress_messages(openai_messages, effective_model, client)
+        else:
+            openai_messages = truncate_messages(openai_messages)
     query = build_query_from_messages(openai_messages, tools=tools_dict)
 
     thinking = False
-
-    # 调用 MimoClient
-    client = MimoClient(account)
     try:
         content, think_content, usage = await client.call_api(
             query, thinking, effective_model, multi_medias
