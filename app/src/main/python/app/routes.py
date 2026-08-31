@@ -21,6 +21,7 @@ from .models import (
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
 from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .context_compressor import compress_messages, should_compress
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 from .tool_sieve import StreamSieve
 from .usage_store import add_usage as _add_usage, get_usage as _get_usage, clear_usage as _clear_usage
@@ -490,30 +491,41 @@ async def chat_completions(
     _update_session_fingerprint(account.user_id, conv_id, request.messages)
 
     # 续接会话时只发增量消息（MiMo 服务端已有 conversationId 上下文）
-    # 新会话时构建全量 query，超长则拆分成多个 chunk
-    if conv_is_new:
-        chunks = build_chunked_queries(
-            request.messages, tools=tools_dict, passthrough=passthrough_mode
-        )
-        query = chunks[-1]  # 最后一个 chunk 用于获取回复
-        # 前面的 chunk 先发给 MiMo 让服务端累积上下文
-        for warmup_query in chunks[:-1]:
-            try:
-                await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
-                print(f"[QueryGuard] Sent warmup chunk ({len(warmup_query)} chars) to conv {conv_id[:8]}")
-            except Exception as e:
-                print(f"[QueryGuard] Warmup chunk failed: {e}")
+    # 新会话时构建全量 query，超长则压缩中间历史
+    needs_compression = conv_is_new and should_compress(request.messages)
+
+    if not needs_compression:
+        if conv_is_new:
+            chunks = build_chunked_queries(
+                request.messages, tools=tools_dict, passthrough=passthrough_mode
+            )
+            query = chunks[-1]  # 最后一个 chunk 用于获取回复
+            # 前面的 chunk 先发给 MiMo 让服务端累积上下文
+            for warmup_query in chunks[:-1]:
+                try:
+                    await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
+                    print(f"[QueryGuard] Sent warmup chunk ({len(warmup_query)} chars) to conv {conv_id[:8]}")
+                except Exception as e:
+                    print(f"[QueryGuard] Warmup chunk failed: {e}")
+        else:
+            query = build_query_from_messages(
+                request.messages, tools=tools_dict, passthrough=passthrough_mode,
+                continuation=True
+            )
     else:
-        query = build_query_from_messages(
-            request.messages, tools=tools_dict, passthrough=passthrough_mode,
-            continuation=True
-        )
+        # 新会话且超长：标记需要压缩，流式响应内部先提示再压缩
+        query = None
 
     # 流式响应
     if request.stream:
         return StreamingResponse(
             _stream_response(client, query, thinking, effective_model, tools_dict, multi_medias, passthrough=passthrough_mode,
-                             conv_id=conv_id, account_id=account.user_id),
+                             conv_id=conv_id, account_id=account.user_id,
+                             needs_compression=needs_compression,
+                             raw_messages=request.messages if needs_compression else None,
+                             raw_tools=tools_dict if needs_compression else None,
+                             raw_passthrough=passthrough_mode if needs_compression else None,
+                             effective_model=effective_model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -523,6 +535,18 @@ async def chat_completions(
         )
 
     # 非流式响应
+    if needs_compression:
+        # 静默压缩（用户等待中，不额外提示）
+        _, request.messages = await compress_messages(request.messages, effective_model, client)
+        chunks = build_chunked_queries(
+            request.messages, tools=tools_dict, passthrough=passthrough_mode
+        )
+        query = chunks[-1]
+        for warmup_query in chunks[:-1]:
+            try:
+                await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
+            except Exception as e:
+                print(f"[QueryGuard] Warmup chunk failed: {e}")
     try:
         content, think_content, usage = await client.call_api(
             query, thinking, effective_model, multi_medias, conversation_id=conv_id)
@@ -585,6 +609,11 @@ async def _stream_response(
     tools: list = None, multi_medias: list = None,
     passthrough: bool = False,
     conv_id: str = None, account_id: str = None,
+    needs_compression: bool = False,
+    raw_messages: list = None,
+    raw_tools: list = None,
+    raw_passthrough: bool = False,
+    effective_model: str = None,
 ):
     """流式响应生成器。
 
@@ -604,6 +633,22 @@ async def _stream_response(
 
     # 初始 role delta
     yield _build_chunk(msg_id, model, created=created_t, role="assistant")
+
+    # 压缩模式：先提示，再压缩，然后重建 query
+    if needs_compression and raw_messages:
+        yield _build_chunk(msg_id, model, created=created_t, content="正在压缩上下文，请稍候...")
+        print(f"[ContextCompressor] 开始压缩 {len(raw_messages)} 条消息")
+        _, compressed_msgs = await compress_messages(raw_messages, effective_model, client)
+        chunks = build_chunked_queries(
+            compressed_msgs, tools=raw_tools, passthrough=raw_passthrough
+        )
+        query = chunks[-1]
+        for warmup_query in chunks[:-1]:
+            try:
+                await client.call_api(warmup_query, False, effective_model, conversation_id=conv_id)
+            except Exception as e:
+                print(f"[QueryGuard] Warmup chunk failed: {e}")
+        yield _build_chunk(msg_id, model, created=created_t, content="压缩完成，正在生成回复...")
 
     has_tools = tools is not None
 
