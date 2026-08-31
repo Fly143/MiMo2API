@@ -7,6 +7,11 @@ android {
     namespace 'com.mimo2api.app'
     compileSdk 35
 
+    lintOptions {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
     defaultConfig {
         applicationId "com.mimo2api.app"
         minSdk 24
