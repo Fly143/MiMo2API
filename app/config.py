@@ -31,7 +31,7 @@ class Config:
     mimo_accounts: List[MimoAccount] = None
     models: List[str] = None  # 自定义模型列表，None 表示自动探测
     tools_passthrough: bool = False  # 全局工具透传模式
-    compression_mode: str = "truncation"  # truncation=裁剪 | compress=LLM压缩
+    compression_mode: str = "compress"  # truncation=裁剪 | compress=LLM压缩
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -139,7 +139,7 @@ class ConfigManager:
                 mimo_accounts=accounts,
                 models=new_config.get('models', []),
                 tools_passthrough=new_config.get('tools_passthrough', False),
-                compression_mode=new_config.get('compression_mode', 'truncation')
+                compression_mode=new_config.get('compression_mode', 'compress')
             )
             self.save()
 
