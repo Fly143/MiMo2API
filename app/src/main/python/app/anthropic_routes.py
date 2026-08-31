@@ -44,6 +44,7 @@ from .config import config_manager
 from .models import OpenAIMessage
 from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, get_tool_names, clean_tool_text
+from .context_compressor import compress_messages, truncate_messages, should_compress
 from .session_store import (
     get_or_create_session as _get_or_create_session,
     update_tokens as _update_session_tokens,
@@ -491,8 +492,14 @@ async def anthropic_messages(
     )
 
     # 续接会话时只发增量消息（MiMo 服务端已有 conversationId 上下文）
-    # 新会话时构建全量 query，超长则拆分成多个 chunk
+    # 新会话时构建全量 query，超长则根据模式裁剪或压缩
     client = MimoClient(account)
+    if conv_is_new and should_compress(msgs_as_objects):
+        mode = config_manager.config.compression_mode
+        if mode == "compress":
+            _, msgs_as_objects = await compress_messages(msgs_as_objects, model, client)
+        else:
+            msgs_as_objects = truncate_messages(msgs_as_objects)
     if conv_is_new:
         chunks = build_chunked_queries(
             msgs_as_objects, tools=tools_dict
