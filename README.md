@@ -59,6 +59,7 @@
 - **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
 - **多账号池** — 管理面板配置多个 MiMo 账号，轮询负载均衡，自动故障转移
 - **动态模型发现** — 启动时从 MiMo 官方 API 实时拉取可用模型列表，无需手动维护
+- **上下文压缩** — 对话超长时自动压缩中间历史为摘要（保留最近 ~20K tokens），避免直接丢弃旧消息
 - **凭证管理** — 支持 Cookie 导入、cURL 导入两种配置方式
 - **CORS 全开** — 允许任意来源跨域访问
 - **TTS 语音合成** — 兼容 OpenAI `/v1/audio/speech` 接口，支持冰糖/茉莉/白桦/苏打/Mia/Chloe 6 种音色，支持 voicedesign 自定义音色和 voiceclone 声音克隆
@@ -361,6 +362,7 @@ curl http://localhost:8080/v1/chat/completions \
 ### 7. 模型发现与刷新
 
 模型列表**启动时自动探测**，从 `https://aistudio.xiaomimimo.com/open-apis/bot/config` 实时拉取，无需手动配置。
+> **⚠️ 幽灵模型说明**：MiMo 网页端未清理历史模型名，动态探测会返回约 16 个模型（含 v2-flash、v2-pro、v2-omni、v2.1 系列等旧名），但**实际能使用的只有最新数字系列**（当前为 `mimo-v2.5`、`mimo-v2.5-pro`，以及 TTS/ASR）。旧模型名可能调用失败或返回空回复，属正常现象。
 
 ```bash
 # 强制刷新模型列表

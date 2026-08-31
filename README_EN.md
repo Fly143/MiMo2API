@@ -56,6 +56,7 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
 - **Deep Thinking** — Reasoning effort parameter support, automatic `<think>` tag separation in output
 - **Multi-Account Pool** — Admin panel for configuring multiple MiMo accounts, round-robin load balancing, automatic failover
 - **Dynamic Model Discovery** — Real-time model list fetched from MiMo official API at startup, no manual maintenance
+- **Context Compression** — Auto-compress middle history into summary when conversation gets too long (preserves recent ~20K tokens), avoiding direct message dropping
 - **Credential Management** — Support for Cookie import and cURL import configuration methods
 - **CORS Fully Open** — Cross-origin access from any source
 - **TTS Speech Synthesis** — Compatible with OpenAI `/v1/audio/speech` endpoint, supports 8 preset voices, voicedesign custom voice, and voiceclone voice cloning
@@ -359,6 +360,7 @@ Streaming responses include a `reasoning` field (corresponding to MiMo's `<think
 ### 8. Model Discovery & Refresh
 
 Model list is **auto-discovered at startup** from `https://aistudio.xiaomimimo.com/open-apis/bot/config`, no manual config needed.
+> **⚠️ Ghost Model Note**: MiMo web client didn't clean up old model names. Dynamic discovery returns ~16 models (including v2-flash, v2-pro, v2-omni, v2.1 series, etc.), but **only the latest numbered series actually works** (currently `mimo-v2.5`, `mimo-v2.5-pro`, plus TTS/ASR). Old model names may fail or return empty responses — this is normal.
 
 ```bash
 # Force refresh model list
