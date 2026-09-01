@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">MiMo2API</string>
     <string name="status_starting">正在启动 Python 服务…</string>
+    <string name="status_timeout">服务启动超时，请重启应用</string>
     <string name="btn_login">登录小米账号</string>
     <string name="login_hint">请登录小米账号…</string>
     <string name="btn_import_waiting">等待登录…</string>
