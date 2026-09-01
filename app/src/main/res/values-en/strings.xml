@@ -13,4 +13,12 @@
     <string name="login_success">Account imported successfully</string>
     <string name="login_failed">Import failed</string>
     <string name="login_cleared">Cleared, please login again</string>
+    <string name="login_captured">✅ Credentials captured, auto-importing…</string>
+    <string name="login_hint_captured">Please login below (captured: %s)</string>
+    <string name="login_incomplete">Credentials incomplete, please login and enter chat</string>
+    <string name="login_clear_title">Clear Login</string>
+    <string name="login_clear_message">This will clear browser cookies and cache. You\'ll need to login again.\n\n(Usually you can logout from the webpage directly)</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="clear">Clear</string>
 </resources>
