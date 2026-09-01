@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -29,9 +30,8 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          key: ubuntu-latest-gradle-v1
+          restore-keys: ubuntu-latest-gradle-
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -40,9 +40,17 @@ jobs:
         run: ./gradlew assembleRelease
 
       - name: Upload APK to Release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/release/app-release.apk
           asset_name: MiMo2API-${{ github.event.release.tag_name }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK as artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiMo2API-apk
+          path: app/build/outputs/apk/release/app-release.apk
