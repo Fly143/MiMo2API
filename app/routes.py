@@ -2032,6 +2032,15 @@ async def _stream_response_events(body: dict, account):
                 multi_medias.append(media_obj)
 
     tools_dict = [dict(t) if hasattr(t, 'dict') else t for t in tools] if tools else None
+
+    # 构建查询（超长则根据模式裁剪/压缩）— 与 _do_response_chat 保持一致
+    client = MimoClient(account)
+    if should_compress(openai_messages):
+        mode = config_manager.config.compression_mode
+        if mode == "compress":
+            _, openai_messages = await compress_messages(openai_messages, effective_model, client)
+        else:
+            openai_messages = truncate_messages(openai_messages)
     query = build_query_from_messages(openai_messages, tools=tools_dict)
     thinking = False
 
