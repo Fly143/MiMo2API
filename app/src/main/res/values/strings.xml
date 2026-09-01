@@ -13,4 +13,12 @@
     <string name="login_success">账号导入成功</string>
     <string name="login_failed">导入失败</string>
     <string name="login_cleared">已清除，请重新登录</string>
+    <string name="login_captured">✅ 已捕获登录凭据，正在自动导入…</string>
+    <string name="login_hint_captured">请在下方登录小米账号（已捕获 %s）</string>
+    <string name="login_incomplete">凭据尚未齐全，请先完成登录并进入对话页</string>
+    <string name="login_clear_title">清除登录态</string>
+    <string name="login_clear_message">将清空浏览器 Cookie 与缓存，需重新登录小米账号。\n\n（一般情况下可直接在网页内退出登录，无需此操作）</string>
+    <string name="ok">确定</string>
+    <string name="cancel">取消</string>
+    <string name="clear">清除</string>
 </resources>
