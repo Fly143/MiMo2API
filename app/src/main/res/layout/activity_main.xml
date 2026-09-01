@@ -19,7 +19,7 @@
         android:textColor="#E6E8EB"
         android:textSize="15sp"
         android:lineSpacingExtra="6dp"
-        android:text="正在启动 Python 服务…" />
+        android:text="@string/status_starting" />
 
     <Button
         android:id="@+id/btn_login"
@@ -28,7 +28,7 @@
         android:layout_gravity="bottom|end"
         android:layout_margin="18dp"
         android:visibility="gone"
-        android:text="登录小米账号"
+        android:text="@string/btn_login"
         android:textSize="13sp"
         android:textColor="#FFFFFF"
         android:backgroundTint="#FF6700"
