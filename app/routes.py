@@ -2061,6 +2061,7 @@ async def _stream_response_events(body: dict, account):
     yield {"type": "response.in_progress", "response": dict(init_payload)}
 
     reasoning_parts: list[str] = []
+    api_usage: dict = {}  # 收集API返回的准确usage数据
     text_parts: list[str] = []
     reasoning_item_id = f"rs_{uuid.uuid4().hex[:24]}"
     message_item_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -2542,16 +2543,23 @@ async def _stream_response_events(body: dict, account):
                 "item": item,
             }
 
-        # 用量估算
-        total_reasoning = "".join(reasoning_parts)
-        total_text = "".join(text_parts)
-        approx_completion = _count_tokens(total_reasoning + total_text)
-        approx_prompt = _count_tokens(query)
-        completion_record = {
-            "input_tokens": approx_prompt,
-            "output_tokens": approx_completion,
-            "total_tokens": approx_prompt + approx_completion,
-        }
+        # 用量统计 — 优先使用API返回的准确数据，否则估算
+        if api_usage:
+            completion_record = {
+                "input_tokens": api_usage.get("promptTokens", 0),
+                "output_tokens": api_usage.get("completionTokens", 0),
+                "total_tokens": api_usage.get("totalTokens", 0) or (api_usage.get("promptTokens", 0) + api_usage.get("completionTokens", 0)),
+            }
+        else:
+            total_reasoning = "".join(reasoning_parts)
+            total_text = "".join(text_parts)
+            approx_completion = _count_tokens(total_reasoning + total_text)
+            approx_prompt = _count_tokens(query)
+            completion_record = {
+                "input_tokens": approx_prompt,
+                "output_tokens": approx_completion,
+                "total_tokens": approx_prompt + approx_completion,
+            }
 
         completed_payload = dict(init_payload)
         completed_payload["status"] = "completed"
