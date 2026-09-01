@@ -25,7 +25,7 @@ android {
 
         python {
             version "3.11"
-            # buildPython由环境自动检测
+            // buildPython由环境自动检测（移除硬编码路径）
 
             pip {
                 install "fastapi==0.115.5"
