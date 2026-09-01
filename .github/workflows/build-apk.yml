@@ -42,12 +42,18 @@ jobs:
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
+      - name: Rename APK
+        if: github.event_name == 'release'
+        run: |
+          APK_PATH="app/build/outputs/apk/release/app-release.apk"
+          NEW_NAME="MiMo2API-${{ github.event.release.tag_name }}.apk"
+          mv "$APK_PATH" "app/build/outputs/apk/release/$NEW_NAME"
+
       - name: Upload APK to Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/app-release.apk
-          asset_name: MiMo2API-${{ github.event.release.tag_name }}.apk
+          files: app/build/outputs/apk/release/MiMo2API-*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
