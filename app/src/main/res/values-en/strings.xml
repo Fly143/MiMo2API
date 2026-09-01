@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MiMo2API</string>
+    <string name="status_starting">Starting Python service…</string>
+    <string name="btn_login">Login Xiaomi Account</string>
+    <string name="login_hint">Please login to Xiaomi account…</string>
+    <string name="btn_import_waiting">Waiting for login…</string>
+    <string name="btn_reload">Reload</string>
+    <string name="btn_clear">Clear Login</string>
+    <string name="login_importing">Verifying and importing…</string>
+    <string name="login_imported">Imported · Return</string>
+    <string name="login_retry">Retry Import</string>
+    <string name="login_success">Account imported successfully</string>
+    <string name="login_failed">Import failed</string>
+    <string name="login_cleared">Cleared, please login again</string>
+</resources>
