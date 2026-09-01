@@ -95,7 +95,8 @@ class ConfigManager:
                     admin_password=data.get('admin_password', 'admin'),
                     mimo_accounts=accounts,
                     models=data.get('models', []),
-                    tools_passthrough=data.get('tools_passthrough', False)
+                    tools_passthrough=data.get('tools_passthrough', False),
+                    compression_mode=data.get('compression_mode', 'compress')
                 )
         except Exception as e:
             print(f"加载配置失败: {e}")
