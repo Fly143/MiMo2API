@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id 'com.android.application'
     id 'com.chaquo.python'
 }
@@ -16,8 +16,8 @@ android {
         applicationId "com.mimo2api.app"
         minSdk 24
         targetSdk 35
-        versionCode 4
-                versionName "2.5.3"
+        versionCode 5
+                versionName "2.5.4"
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -25,7 +25,7 @@ android {
 
         python {
             version "3.11"
-            // buildPython由环境自动检测（移除硬编码路径）
+            // buildPython鐢辩幆澧冭嚜鍔ㄦ娴嬶紙绉婚櫎纭紪鐮佽矾寰勶級
 
             pip {
                 install "fastapi==0.115.5"
@@ -41,8 +41,8 @@ android {
         }
     }
 
-    // 签名：仓库不含 keystore（敏感）。存在 release.keystore 时用 release 签名；
-    // 不存在时回退 debug 签名，保证 clone 后可直接构建安装。
+    // 绛惧悕锛氫粨搴撲笉鍚?keystore锛堟晱鎰燂級銆傚瓨鍦?release.keystore 鏃剁敤 release 绛惧悕锛?
+    // 涓嶅瓨鍦ㄦ椂鍥為€€ debug 绛惧悕锛屼繚璇?clone 鍚庡彲鐩存帴鏋勫缓瀹夎銆?
     def hasReleaseKey = file('../release.keystore').exists()
     signingConfigs {
         release {
