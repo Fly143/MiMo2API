@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MiMo2API</string>
+    <string name="status_starting">正在启动 Python 服务…</string>
+    <string name="btn_login">登录小米账号</string>
+    <string name="login_hint">请登录小米账号…</string>
+    <string name="btn_import_waiting">等待登录…</string>
+    <string name="btn_reload">重载</string>
+    <string name="btn_clear">清除登录</string>
+    <string name="login_importing">正在验证并导入…</string>
+    <string name="login_imported">已导入 · 返回</string>
+    <string name="login_retry">重试导入</string>
+    <string name="login_success">账号导入成功</string>
+    <string name="login_failed">导入失败</string>
+    <string name="login_cleared">已清除，请重新登录</string>
 </resources>
