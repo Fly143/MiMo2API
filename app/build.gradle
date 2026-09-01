@@ -25,7 +25,7 @@ android {
 
         python {
             version "3.11"
-            buildPython "C:/Users/Administrator/AppData/Local/Programs/Python/Python311/python.exe"
+            # buildPython由环境自动检测
 
             pip {
                 install "fastapi==0.115.5"
