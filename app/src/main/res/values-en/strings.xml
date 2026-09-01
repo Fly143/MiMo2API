@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">MiMo2API</string>
     <string name="status_starting">Starting Python service…</string>
+    <string name="status_timeout">Service startup timeout, please restart</string>
     <string name="btn_login">Login Xiaomi Account</string>
     <string name="login_hint">Please login to Xiaomi account…</string>
     <string name="btn_import_waiting">Waiting for login…</string>
