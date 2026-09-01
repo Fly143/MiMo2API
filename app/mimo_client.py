@@ -3,9 +3,15 @@
 import json
 import uuid
 import httpx
+import asyncio
 import traceback
 from typing import Optional, Tuple, AsyncIterator
 from .config import MimoAccount
+
+# ─── 重试配置 ─────────────────────────────────────────────
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 10.0
 
 
 class MimoApiError(Exception):
@@ -67,8 +73,30 @@ class MimoClient:
         }
 
     async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
+        """调用Mimo API（非流式），带重试"""
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                return await self._call_api_once(query, thinking, model, multi_medias, attachments, conversation_id)
+            except MimoApiError as e:
+                last_error = e
+                if e.status_code in (401, 403, 404):
+                    raise
+                if attempt < MAX_RETRIES - 1:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                    print(f"[Retry] {attempt+1}/{MAX_RETRIES} failed ({e.status_code}), retry in {delay}s...")
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                    print(f"[Retry] {attempt+1}/{MAX_RETRIES} failed ({e}), retry in {delay}s...")
+                    await asyncio.sleep(delay)
+        raise last_error
+
+    async def _call_api_once(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
         """
-        调用Mimo API（非流式）
+        调用Mimo API（非流式）单次执行
 
         Args:
             conversation_id: 复用现有 MiMo 会话 ID（None=新建）
