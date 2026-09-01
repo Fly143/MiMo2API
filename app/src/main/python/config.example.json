@@ -6,5 +6,7 @@
       "user_id": "YOUR_USER_ID",
       "xiaomichatbot_ph": "YOUR_XIAOMICHATBOT_PH"
     }
-  ]
+  ],
+  "tools_passthrough": false,
+  "compression_mode": "compress"
 }
