@@ -232,11 +232,97 @@ def _strip_tool_result_blocks(text: str) -> str:
 
 
 def _strip_citations(text: str) -> str:
-    """移除 MiMo 模型输出的引用标记，如 (citation:1)(citation:14)。"""
+    """移除 MiMo 模型输出的引用标记，如 (citation:1)、citation:1。"""
     if not text:
         return text
-    return re.sub(r'\(citation:\d+\)\s*', '', text).strip()
+    return re.sub(r'\s*\(citation:\d+\)\s*|\s*citation:\d+\s*', ' ', text).strip()
 
+
+
+
+
+class _StreamCitationBuf:
+    """流式 citation 处理。
+    - citation_map 为空时: 直接 strip 标记（不缓冲）
+    - citation_map 有数据时: 缓冲不完整的 (citation:N（缺右括号），替换完整的
+    """
+    # 只检测带括号但没闭合的: (citation: 或 (citation:123
+    # 不匹配 citation:1（无括号的完整标记）或 (citation:1)（完整的）
+    _partial = re.compile(r'\(citation:\d*$')
+
+    def __init__(self):
+        self.buf = ""
+
+    def feed(self, text, citation_map, fmt):
+        combined = self.buf + text
+        self.buf = ""
+        m = self._partial.search(combined)
+        if m:
+            self.buf = combined[m.start():]
+            combined = combined[:m.start()]
+        if combined:
+            if citation_map:
+                result = _format_citations(combined, citation_map, fmt)
+            else:
+                result = _strip_citations(combined)
+            # 双重保险：清理残留的 citation 标记
+            return _strip_citations(result) if result else ""
+        return 
+
+    def flush(self, citation_map, fmt):
+        """流结束，处理剩余缓冲。"""
+        if self.buf:
+            text = self.buf
+            self.buf = ""
+            return _format_citations(text, citation_map, fmt)
+        return ""
+
+def _build_citation_map(citations: list) -> dict:
+    """构建 citation 编号到信息的映射。
+    
+    模型输出的 citation:N 指的是列表中的第 N 条引用（从1开始）。
+    """
+    citation_map = {}
+    for i, cite in enumerate(citations, 1):
+        citation_map[i] = {
+            'url': cite.get('url', ''),
+            'name': cite.get('name', cite.get('siteName', '')),
+            'snippet': cite.get('snippet', cite.get('text', ''))[:200],
+            'site_name': cite.get('siteName', ''),
+        }
+    return citation_map
+
+
+def _format_citations(text: str, citation_map: dict, fmt: str) -> str:
+    """根据格式处理正文中的 citation 标记。"""
+    if not citation_map or fmt == 'none':
+        return _strip_citations(text)
+    
+    # 匹配 (citation:N) 和 citation:N 两种格式
+    pattern = re.compile(r'\(citation:(\d+)\)|citation:(\d+)')
+    
+    if fmt == 'appendix':
+        def repl(m):
+            num = int(m.group(1) or m.group(2))
+            return f'[{num}]' if num in citation_map else ''
+        text = pattern.sub(repl, text)
+        text += '\n\n---\n'
+        for num, info in sorted(citation_map.items()):
+            url = info.get('url', '')
+            name = info.get('name', '')
+            if url:
+                text += f'[{num}] {name}: {url}\n'
+        return text
+    
+    # inline (default)
+    def repl(m):
+        num = int(m.group(1) or m.group(2))
+        if num in citation_map:
+            url = citation_map[num].get('url', '')
+            if url:
+                return f'[{num}]({url})'
+        return ''
+    return pattern.sub(repl, text)
 
 def _camel_case(name: str) -> str:
     """snake_case -> camelCase: web_search -> webSearch"""
@@ -541,7 +627,8 @@ async def chat_completions(
                              raw_messages=request.messages if needs_compression else None,
                              raw_tools=tools_dict if needs_compression else None,
                              raw_passthrough=passthrough_mode if needs_compression else None,
-                             effective_model=effective_model),
+                             effective_model=effective_model,
+                             citation_format=getattr(request, 'citation_format', 'inline') or 'inline'),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -564,7 +651,7 @@ async def chat_completions(
             except Exception as e:
                 print(f"[QueryGuard] Warmup chunk failed: {e}")
     try:
-        content, think_content, usage = await client.call_api(
+        content, think_content, usage, citations = await client.call_api(
             query, thinking, effective_model, multi_medias, conversation_id=conv_id)
 
         # 保存用量
@@ -577,7 +664,10 @@ async def chat_completions(
 
         # 清理模型输出杂质
         content = _strip_tool_result_blocks(content)
-        content = _strip_citations(content)
+        # 处理 citation 标记
+        citation_fmt = citation_format or 'inline'
+        citation_map = _build_citation_map(citations)
+        content = _format_citations(content, citation_map, citation_fmt)
         content = clean_tool_text(content)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -630,6 +720,7 @@ async def _stream_response(
     raw_tools: list = None,
     raw_passthrough: bool = False,
     effective_model: str = None,
+    citation_format: str = "inline",
 ):
     """流式响应生成器。
 
@@ -690,8 +781,18 @@ async def _stream_response(
             buffer = ""
             last_usage = None
 
+            citation_fmt = citation_format or 'inline'
+            citation_map = {}
+            pending_text = ""
+            scb = _StreamCitationBuf()
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
                 # 用量事件
+                if sse_data.get("type") == "citations":
+                    citations_data = sse_data.get("data", [])
+                    citation_map = _build_citation_map(citations_data)
+                    # 处理之前缓冲的文本
+                    # citation data arrived, scb will use it for future chunks
+                    continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -714,7 +815,10 @@ async def _stream_response(
                                         clean = _clean_response_text(ev.data, tool_names)
                                         if clean:
                                             content_buffer_chunks.append(clean)
-                                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                                            if citation_map:
+                                                                                                                                                yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                                            else:
+                                                pending_text += clean
                                     elif ev.type == 'tool_calls':
                                         collected_tool_calls.extend(ev.data)
                             in_think = True
@@ -728,7 +832,10 @@ async def _stream_response(
                                     clean = _clean_response_text(ev.data, tool_names)
                                     if clean:
                                         content_buffer_chunks.append(clean)
-                                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                                        if citation_map:
+                                            yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                                        else:
+                                            pending_text += clean
                                 elif ev.type == 'tool_calls':
                                     collected_tool_calls.extend(ev.data)
                         buffer = keep
@@ -756,7 +863,7 @@ async def _stream_response(
                         clean = _clean_response_text(ev.data, tool_names)
                         if clean:
                             content_buffer_chunks.append(clean)
-                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                            yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
                     elif ev.type == 'tool_calls':
                         collected_tool_calls.extend(ev.data)
 
@@ -766,7 +873,7 @@ async def _stream_response(
                     clean = _clean_response_text(ev.data, tool_names)
                     if clean:
                         content_buffer_chunks.append(clean)
-                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                        yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
                 elif ev.type == 'tool_calls':
                     collected_tool_calls.extend(ev.data)
 
@@ -782,6 +889,10 @@ async def _stream_response(
                 return
 
             # 无工具调用：content 已在流中发出，只需发 stop
+            # Flush citation buffer
+            flushed = scb.flush(citation_map, citation_fmt)
+            if flushed:
+                yield _build_chunk(msg_id, model, created=created_t, content=flushed)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
             if last_usage:
@@ -796,7 +907,17 @@ async def _stream_response(
             in_think = False
             last_usage = None
 
+            citation_fmt = citation_format or 'inline'
+            citation_map = {}
+            pending_text = ""
+            scb = _StreamCitationBuf()
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+                if sse_data.get("type") == "citations":
+                    citations_data = sse_data.get("data", [])
+                    citation_map = _build_citation_map(citations_data)
+                    # 处理之前缓冲的文本
+                    # citation data arrived, scb will use it for future chunks
+                    continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -814,7 +935,7 @@ async def _stream_response(
                             if safe:
                                 clean = _clean_response_text(safe)
                                 if clean:
-                                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                                    yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
                             in_think = True
                             buffer = buffer[idx + len(THINK_OPEN):]
                             continue
@@ -823,7 +944,7 @@ async def _stream_response(
                         if safe:
                             clean = _clean_response_text(safe)
                             if clean:
-                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                                yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
                         buffer = keep
                         break
                     else:
@@ -849,8 +970,12 @@ async def _stream_response(
                     if in_think:
                         yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
                     else:
-                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
+                        yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
 
+            # Flush citation buffer
+            flushed = scb.flush(citation_map, citation_fmt)
+            if flushed:
+                yield _build_chunk(msg_id, model, created=created_t, content=flushed)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
             if last_usage:
@@ -867,13 +992,9 @@ async def _stream_response(
         yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        # import traceback
-        # tb = traceback.format_exc()
-        # log_path = Path(__file__).parent.parent / "error.log"
-        # if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
-        #     log_path.write_text('')
-        # with open(log_path, "a") as f:
-        #     f.write(f"=== STREAM ERROR ===\n{tb}\n\n")
+        import traceback
+        tb = traceback.format_exc()
+        print(f"=== STREAM ERROR ===\n{tb}")
         yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -1267,7 +1388,7 @@ async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph:
     client = MimoClient(account)
 
     try:
-        content, _, _ = await client.call_api("hi", False)
+        content, _, _, _ = await client.call_api("hi", False)
         now = _dt.now().strftime("%m-%d %H:%M")
 
         existing = False
@@ -1316,7 +1437,7 @@ async def test_account(idx: int, username: str = Depends(verify_admin)):
     client = MimoClient(acc)
 
     try:
-        content, _, _ = await client.call_api("hi", False)
+        content, _, _, _ = await client.call_api("hi", False)
         acc.is_valid = True
         acc.last_test = _dt.now().strftime("%m-%d %H:%M")
         config_manager.save()
@@ -1366,7 +1487,7 @@ async def test_account_endpoint(request: TestAccountRequest, username: str = Dep
             xiaomichatbot_ph=request.xiaomichatbot_ph
         )
         client = MimoClient(account)
-        content, _, _ = await client.call_api("hi", False)
+        content, _, _, _ = await client.call_api("hi", False)
         return {"success": True, "response": content}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1901,7 +2022,7 @@ async def _do_response_chat(body: dict, account) -> tuple:
 
     thinking = False
     try:
-        content, think_content, usage = await client.call_api(
+        content, think_content, usage, citations = await client.call_api(
             query, thinking, effective_model, multi_medias
         )
     except MimoApiError as e:
@@ -1916,7 +2037,9 @@ async def _do_response_chat(body: dict, account) -> tuple:
 
     # 清理输出
     content = _strip_tool_result_blocks(content)
-    content = _strip_citations(content)
+    # 处理 citation 标记
+    citation_map = _build_citation_map(citations)
+    content = _format_citations(content, citation_map, "inline")
     content = clean_tool_text(content)
 
     # 额外处理：模型可能输出多个 think 块，_parse_think_tags 只剥除了第一个

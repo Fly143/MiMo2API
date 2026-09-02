@@ -29,6 +29,7 @@ class OpenAIRequest(BaseModel):
     tools: Optional[List[OpenAITool]] = None
     tool_choice: Optional[Any] = None
     passthrough: bool = False
+    citation_format: Optional[str] = Field("inline", description="引用格式: inline=markdown内联链接, appendix=文末附录, none=移除标记")
     audio: Optional[Dict[str, Any]] = None
 
 

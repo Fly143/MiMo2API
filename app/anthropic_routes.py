@@ -544,7 +544,7 @@ async def anthropic_messages(
     # 非流式
     # ═══════════════════════════════════════════════════════════
     try:
-        content, think_content, usage = await client.call_api(
+        content, think_content, usage, _ = await client.call_api(
             query, False, model, multi_medias=multi_medias, conversation_id=conv_id,
         )
 
@@ -667,7 +667,7 @@ async def anthropic_create_batch_ep(request: Request):
 
         client = MimoClient(account)
         try:
-            c, tc, usage = await client.call_api(query, False, model)
+            c, tc, usage, _ = await client.call_api(query, False, model)
             c = _strip_citations(c)
             message = {"role": "assistant", "content": c}
             if tc:

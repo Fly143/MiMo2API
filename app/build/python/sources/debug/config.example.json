@@ -1,0 +1,10 @@
+{
+  "api_keys": "sk-mimo",
+  "mimo_accounts": [
+    {
+      "service_token": "YOUR_SERVICE_TOKEN",
+      "user_id": "YOUR_USER_ID",
+      "xiaomichatbot_ph": "YOUR_XIAOMICHATBOT_PH"
+    }
+  ]
+}

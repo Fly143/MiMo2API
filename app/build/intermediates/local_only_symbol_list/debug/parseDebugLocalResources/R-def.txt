@@ -1,0 +1,17 @@
+R_DEF: Internal format may change without notice
+local
+id btn_clear
+id btn_import
+id btn_login
+id btn_reload
+id login_hint
+id login_web
+id status
+id web
+layout activity_login
+layout activity_main
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+style Theme.MiMo2API
+xml network_security_config

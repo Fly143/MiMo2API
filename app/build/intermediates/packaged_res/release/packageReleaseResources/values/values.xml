@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MiMo2API</string>
+    <string name="btn_clear">清除登录</string>
+    <string name="btn_import_waiting">等待登录…</string>
+    <string name="btn_login">登录小米账号</string>
+    <string name="btn_reload">重载</string>
+    <string name="cancel">取消</string>
+    <string name="clear">清除</string>
+    <string name="login_captured">✅ 已捕获登录凭据，正在自动导入…</string>
+    <string name="login_clear_message">将清空浏览器 Cookie 与缓存，需重新登录小米账号。\n\n（一般情况下可直接在网页内退出登录，无需此操作）</string>
+    <string name="login_clear_title">清除登录态</string>
+    <string name="login_cleared">已清除，请重新登录</string>
+    <string name="login_failed">导入失败</string>
+    <string name="login_hint">请登录小米账号…</string>
+    <string name="login_hint_captured">请在下方登录小米账号（已捕获 %s）</string>
+    <string name="login_imported">已导入 · 返回</string>
+    <string name="login_importing">正在验证并导入…</string>
+    <string name="login_incomplete">凭据尚未齐全，请先完成登录并进入对话页</string>
+    <string name="login_retry">重试导入</string>
+    <string name="login_success">账号导入成功</string>
+    <string name="ok">确定</string>
+    <string name="status_starting">正在启动 Python 服务…</string>
+    <string name="status_timeout">服务启动超时，请重启应用</string>
+    <style name="Theme.MiMo2API" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#0F1115</item>
+        <item name="android:windowBackground">#0F1115</item>
+    </style>
+</resources>

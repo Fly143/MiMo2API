@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MiMo2API</string>
+    <string name="btn_clear">Clear Login</string>
+    <string name="btn_import_waiting">Waiting for login…</string>
+    <string name="btn_login">Login Xiaomi Account</string>
+    <string name="btn_reload">Reload</string>
+    <string name="cancel">Cancel</string>
+    <string name="clear">Clear</string>
+    <string name="login_captured">✅ Credentials captured, auto-importing…</string>
+    <string name="login_clear_message">This will clear browser cookies and cache. You\'ll need to login again.\n\n(Usually you can logout from the webpage directly)</string>
+    <string name="login_clear_title">Clear Login</string>
+    <string name="login_cleared">Cleared, please login again</string>
+    <string name="login_failed">Import failed</string>
+    <string name="login_hint">Please login to Xiaomi account…</string>
+    <string name="login_hint_captured">Please login below (captured: %s)</string>
+    <string name="login_imported">Imported · Return</string>
+    <string name="login_importing">Verifying and importing…</string>
+    <string name="login_incomplete">Credentials incomplete, please login and enter chat</string>
+    <string name="login_retry">Retry Import</string>
+    <string name="login_success">Account imported successfully</string>
+    <string name="ok">OK</string>
+    <string name="status_starting">Starting Python service…</string>
+    <string name="status_timeout">Service startup timeout, please restart</string>
+</resources>

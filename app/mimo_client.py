@@ -119,6 +119,7 @@ class MimoClient:
                 raise MimoApiError(response.status_code, response.text)
 
             result = []
+            citations = []
             usage = {"promptTokens": 0, "completionTokens": 0}
 
             # 解析SSE流
@@ -148,7 +149,7 @@ class MimoClient:
             full_text = "".join(result).replace("\x00", "")
             content, think_content = self._parse_think_tags(full_text)
 
-            return content, think_content, usage
+            return content, think_content, usage, citations
 
     async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> AsyncIterator[dict]:
         """
@@ -186,6 +187,8 @@ class MimoClient:
 
                     # 安全的类型分发
                     if isinstance(sse_data, list):
+                        # list 事件 = 搜索结果（含 citation URL）
+                        yield {"type": "citations", "data": sse_data}
                         continue
                     if not isinstance(sse_data, dict):
                         continue
@@ -209,7 +212,8 @@ class MimoClient:
                     elif "promptTokens" in sse_data:
                         yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
                                "completionTokens": sse_data.get("completionTokens", 0),
-                               "totalTokens": sse_data.get("totalTokens", 0)}
+                               "totalTokens": sse_data.get("totalTokens", 0),
+                               "nativeUsage": sse_data.get("nativeUsage", {})}
 
     @staticmethod
     def _parse_think_tags(text: str) -> Tuple[str, str]:
