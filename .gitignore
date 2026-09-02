@@ -6,3 +6,10 @@ usage.json
 app/responses.json
 test_tts.wav
 usage.json
+.gradle/
+app/build/
+*.apk
+*.bak
+fix_partial.py
+fix_regex.py
+venv/
