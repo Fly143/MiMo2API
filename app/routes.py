@@ -242,40 +242,37 @@ def _strip_citations(text: str) -> str:
 
 
 class _StreamCitationBuf:
-    """流式 citation 处理。
-    - citation_map 为空时: 直接 strip 标记（不缓冲）
-    - citation_map 有数据时: 缓冲不完整的 (citation:N（缺右括号），替换完整的
     """
-    # 只检测带括号但没闭合的: (citation: 或 (citation:123
-    # 不匹配 citation:1（无括号的完整标记）或 (citation:1)（完整的）
-    _partial = re.compile(r'\(citation:\d*$')
-
+    """
     def __init__(self):
-        self.buf = ""
+        self.chunks = []
 
     def feed(self, text, citation_map, fmt):
-        combined = self.buf + text
-        self.buf = ""
-        m = self._partial.search(combined)
-        if m:
-            self.buf = combined[m.start():]
-            combined = combined[:m.start()]
-        if combined:
-            if citation_map:
-                result = _format_citations(combined, citation_map, fmt)
-            else:
-                result = _strip_citations(combined)
-            # 双重保险：清理残留的 citation 标记
-            return _strip_citations(result) if result else ""
-        return 
+        """始终缓存，不立即输出。"""
+        if text:
+            self.chunks.append(text)
+        return ""
+
+    def flush_pending(self, citation_map, fmt):
+        """URL 数据到达后调用：把缓存的文本做替换后输出。"""
+        if not self.chunks:
+            return ""
+        combined = "".join(self.chunks)
+        self.chunks = []
+        result = _format_citations(combined, citation_map, fmt)
+        return _strip_citations(result) if result else ""
 
     def flush(self, citation_map, fmt):
-        """流结束，处理剩余缓冲。"""
-        if self.buf:
-            text = self.buf
-            self.buf = ""
-            return _format_citations(text, citation_map, fmt)
-        return ""
+        """流结束：处理剩余缓存。"""
+        if not self.chunks:
+            return ""
+        combined = "".join(self.chunks)
+        self.chunks = []
+        if citation_map:
+            result = _format_citations(combined, citation_map, fmt)
+            return _strip_citations(result) if result else ""
+        return _strip_citations(combined)
+
 
 def _build_citation_map(citations: list) -> dict:
     """构建 citation 编号到信息的映射。
@@ -790,8 +787,9 @@ async def _stream_response(
                 if sse_data.get("type") == "citations":
                     citations_data = sse_data.get("data", [])
                     citation_map = _build_citation_map(citations_data)
-                    # 处理之前缓冲的文本
-                    # citation data arrived, scb will use it for future chunks
+                    flushed = scb.flush_pending(citation_map, citation_fmt)
+                    if flushed:
+                        yield _build_chunk(msg_id, model, created=created_t, content=flushed)
                     continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
@@ -915,8 +913,9 @@ async def _stream_response(
                 if sse_data.get("type") == "citations":
                     citations_data = sse_data.get("data", [])
                     citation_map = _build_citation_map(citations_data)
-                    # 处理之前缓冲的文本
-                    # citation data arrived, scb will use it for future chunks
+                    flushed = scb.flush_pending(citation_map, citation_fmt)
+                    if flushed:
+                        yield _build_chunk(msg_id, model, created=created_t, content=flushed)
                     continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
