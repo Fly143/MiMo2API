@@ -153,7 +153,7 @@ async def compress_messages(messages, model, client):
     prompt = build_summary_prompt(middle)
 
     try:
-        content, _, _ = await client.call_api(prompt, False, model)
+        content, _, _, _ = await client.call_api(prompt, False, model)
     except Exception as e:
         print(f"[ContextCompressor:compress] 摘要调用失败，回退到截断: {e}")
         return None, truncate_messages(messages)
