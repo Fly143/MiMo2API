@@ -471,7 +471,7 @@ def build_query_from_messages(
     # 老模型（v2-flash 等）若服务端拒长文本，可调小 MIMO_MAX_QUERY_CHARS 环境变量覆盖。
     # continuation 模式下只发增量，通常远低于限制。
     # 非 continuation 模式下采用滑动窗口：保留 system，从尾部裁剪历史。
-    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "1048576"))
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "102000"))
     if not no_truncate and len(full_query) > MAX_QUERY_CHARS:
         system_prefix = ""
         history_parts = query_parts
@@ -512,7 +512,7 @@ def build_chunked_queries(
     Returns:
         [query_str, ...] — 如果不需要拆分则返回 [full_query]（单元素列表）
     """
-    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "1048576"))
+    MAX_QUERY_CHARS = int(__import__("os").getenv("MIMO_MAX_QUERY_CHARS", "102000"))
 
     from .tool_call import build_tool_prompt
 
@@ -557,40 +557,48 @@ def build_chunked_queries(
             content = f"[tool_result id={tool_call_id[:8]}] {clean}"
         msg_strs.append(f"{msg.role}: {content}")
 
-    # 按消息边界拆分
-    available = MAX_QUERY_CHARS - sys_len - 1  # -1 for newline after system
+    # 按消息边界拆分 — system prompt 只在第一个 chunk 注入
+    available = MAX_QUERY_CHARS - 1  # 后续 chunk 不带 system
     chunks = []
     current_parts = []
     current_len = 0
+    first_chunk = True
 
     for ms in msg_strs:
         part_len = len(ms) + 1  # +1 for \n
-        if part_len > available:
+        # 第一个 chunk 需要预留 system 空间
+        chunk_available = available - (sys_len + 1 if first_chunk else 0)
+        if part_len > chunk_available:
             # 单条消息本身就超限 → 按字符拆成多段
-            # 先把已有的 parts 存起来
             if current_parts:
-                chunks.append(system_prefix + "\n".join(current_parts))
+                prefix = system_prefix if first_chunk else ""
+                chunks.append(prefix + "\n".join(current_parts))
+                first_chunk = False
                 current_parts = []
                 current_len = 0
             # 拆分这条超长消息
             role_prefix = ms.split(": ", 1)[0] + ": " if ": " in ms else ""
             body = ms[len(role_prefix):]
             suffix = "\n\n（内容未完，请不要回复，等待后续内容）"
-            chunk_budget = available - len(role_prefix) - len(suffix) - 1
+            chunk_budget = chunk_available - len(role_prefix) - len(suffix) - 1
             pos = 0
             while pos < len(body):
                 segment = body[pos:pos + chunk_budget]
                 if pos + chunk_budget < len(body):
                     # 非最后一段，加提示让模型不要回复
-                    chunks.append(system_prefix + role_prefix + segment + suffix)
+                    prefix = system_prefix if first_chunk else ""
+                    chunks.append(prefix + role_prefix + segment + suffix)
+                    first_chunk = False
                 else:
                     # 最后一段，正常发送
                     current_parts.append(role_prefix + segment)
                     current_len = len(role_prefix) + len(segment) + 1
                 pos += chunk_budget
-        elif current_parts and current_len + part_len > available:
+        elif current_parts and current_len + part_len > chunk_available:
             # 当前 chunk 满了，保存并开始新 chunk
-            chunks.append(system_prefix + "\n".join(current_parts))
+            prefix = system_prefix if first_chunk else ""
+            chunks.append(prefix + "\n".join(current_parts))
+            first_chunk = False
             current_parts = [ms]
             current_len = part_len
         else:
@@ -598,7 +606,8 @@ def build_chunked_queries(
             current_len += part_len
 
     if current_parts:
-        chunks.append(system_prefix + "\n".join(current_parts))
+        prefix = system_prefix if first_chunk else ""
+        chunks.append(prefix + "\n".join(current_parts))
 
     final = [c for c in chunks if c.strip()]
     print(f"[QueryGuard] Query split into {len(final)} chunks: {[len(c) for c in final]} chars")

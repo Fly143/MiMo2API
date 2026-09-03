@@ -662,7 +662,7 @@ async def chat_completions(
         # 清理模型输出杂质
         content = _strip_tool_result_blocks(content)
         # 处理 citation 标记
-        citation_fmt = citation_format or 'inline'
+        citation_fmt = getattr(request, 'citation_format', None) or 'inline'
         citation_map = _build_citation_map(citations)
         content = _format_citations(content, citation_map, citation_fmt)
         content = clean_tool_text(content)
