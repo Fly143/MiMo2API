@@ -1,4 +1,4 @@
-﻿"""閰嶇疆绠＄悊妯″潡"""
+"""配置管理模块"""
 
 import json
 import threading
@@ -7,9 +7,16 @@ from typing import List, Optional
 from dataclasses import dataclass, asdict
 
 
+# ─── 默认配置常量 ─────────────────────────────────────────
+DEFAULT_API_KEYS = "sk-mimo"
+DEFAULT_ADMIN_PASSWORD = "admin"
+DEFAULT_TOOLS_PASSTHROUGH = False
+DEFAULT_COMPRESSION_MODE = "compress"
+
+
 @dataclass
 class MimoAccount:
-    """Mimo璐﹀彿閰嶇疆"""
+    """Mimo账号配置"""
     service_token: str
     user_id: str
     xiaomichatbot_ph: str
@@ -25,13 +32,13 @@ class MimoAccount:
 
 @dataclass
 class Config:
-    """搴旂敤閰嶇疆"""
+    """应用配置"""
     api_keys: str = DEFAULT_API_KEYS
     admin_password: str = DEFAULT_ADMIN_PASSWORD
     mimo_accounts: List[MimoAccount] = None
-    models: List[str] = None  # 鑷畾涔夋ā鍨嬪垪琛紝None 琛ㄧず鑷姩鎺㈡祴
-    tools_passthrough: bool = DEFAULT_TOOLS_PASSTHROUGH  # 鍏ㄥ眬宸ュ叿閫忎紶妯″紡
-    compression_mode: str = DEFAULT_COMPRESSION_MODE  # truncation=瑁佸壀 | compress=LLM鍘嬬缉
+    models: List[str] = None  # 自定义模型列表，None 表示自动探测
+    tools_passthrough: bool = DEFAULT_TOOLS_PASSTHROUGH  # 全局工具透传模式
+    compression_mode: str = DEFAULT_COMPRESSION_MODE  # truncation=裁剪 | compress=LLM压缩
 
     def __post_init__(self):
         if self.mimo_accounts is None:
@@ -52,7 +59,7 @@ class Config:
         return d
 
     def to_save_dict(self):
-        """鐢ㄤ簬淇濆瓨鍒版枃浠剁殑鏍煎紡锛堜笉鍚?token_masked锛?""
+        """用于保存到文件的格式（不含 token_masked）"""
         d = {
             "api_keys": self.api_keys,
             "admin_password": self.admin_password,
@@ -69,7 +76,7 @@ class Config:
 
 
 class ConfigManager:
-    """閰嶇疆绠＄悊鍣?- 绾跨▼瀹夊叏"""
+    """配置管理器 - 线程安全"""
 
     def __init__(self, config_file: str = "config.json"):
         self.config_file = Path(config_file)
@@ -79,7 +86,7 @@ class ConfigManager:
         self.load()
 
     def load(self):
-        """鍔犺浇閰嶇疆"""
+        """加载配置"""
         if not self.config_file.exists():
             self.save()
             return
@@ -99,27 +106,27 @@ class ConfigManager:
                     compression_mode=data.get('compression_mode', DEFAULT_COMPRESSION_MODE)
                 )
         except Exception as e:
-            print(f"鍔犺浇閰嶇疆澶辫触: {e}")
+            print(f"加载配置失败: {e}")
             self.config = Config()
             self.save()
 
     def save(self):
-        """淇濆瓨閰嶇疆"""
+        """保存配置"""
         with self.lock:
             try:
                 with open(self.config_file, 'w', encoding='utf-8') as f:
                     json.dump(self.config.to_save_dict(), f, indent=2, ensure_ascii=False)
             except Exception as e:
-                print(f"淇濆瓨閰嶇疆澶辫触: {e}")
+                print(f"保存配置失败: {e}")
 
     def validate_api_key(self, key: str) -> bool:
-        """楠岃瘉API Key"""
+        """验证API Key"""
         with self.lock:
             keys = [k.strip() for k in self.config.api_keys.split(',')]
             return key in keys
 
     def get_next_account(self) -> Optional[MimoAccount]:
-        """鑾峰彇涓嬩竴涓处鍙凤紙杞锛?""
+        """获取下一个账号（轮询）"""
         with self.lock:
             if not self.config.mimo_accounts:
                 return None
@@ -128,7 +135,7 @@ class ConfigManager:
             return account
 
     def update_config(self, new_config: dict):
-        """鏇存柊閰嶇疆"""
+        """更新配置"""
         with self.lock:
             accounts = [
                 MimoAccount(**{k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__})
@@ -145,10 +152,10 @@ class ConfigManager:
             self.save()
 
     def get_config(self) -> dict:
-        """鑾峰彇閰嶇疆"""
+        """获取配置"""
         with self.lock:
             return self.config.to_dict()
 
 
-# 鍏ㄥ眬閰嶇疆绠＄悊鍣ㄥ疄渚?
+# 全局配置管理器实例
 config_manager = ConfigManager()
