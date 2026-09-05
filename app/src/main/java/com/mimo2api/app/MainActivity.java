@@ -159,7 +159,7 @@ public class MainActivity extends AppCompatActivity {
                 ui.post(() -> showAdmin());
             } else {
                 ui.post(() -> {
-                    status.setText(getString(R.string.status_starting) + "\\n" + (attempt / 2) + "s");
+                    status.setText(getString(R.string.status_starting) + "\n" + (attempt / 2) + "s");
                     ui.postDelayed(() -> waitForServer(attempt + 1), 500);
                 });
             }
