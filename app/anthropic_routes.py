@@ -52,7 +52,7 @@ from .session_store import (
 )
 from .usage_store import add_usage as _add_usage
 from .routes import (
-    _strip_citations, _strip_tool_result_blocks,
+    _strip_tool_result_blocks,
     _strip_tool_name_prefix, _strip_mimo_prefix, _safe_flush,
     validate_api_key,
 )
@@ -241,7 +241,6 @@ async def _anthropic_stream_think_wrapper(
             for ev in sieve.feed(buf_text):
                 if ev.type == 'text':
                     clean = _strip_tool_result_blocks(ev.data)
-                    clean = _strip_citations(clean)
                     clean = _strip_tool_name_prefix(clean, tool_names)
                     clean = _strip_mimo_prefix(clean)
                     clean = clean_tool_text(clean)
@@ -251,7 +250,6 @@ async def _anthropic_stream_think_wrapper(
                     collected_tool_calls.extend(ev.data)
         else:
             clean = _strip_tool_result_blocks(buf_text)
-            clean = _strip_citations(clean)
             clean = _strip_mimo_prefix(clean)
             clean = clean_tool_text(clean)
             events.extend(_emit_text(clean))
@@ -347,7 +345,6 @@ async def _anthropic_stream_think_wrapper(
         for ev in sieve.flush():
             if ev.type == 'text':
                 clean = _strip_tool_result_blocks(ev.data)
-                clean = _strip_citations(clean)
                 clean = _strip_tool_name_prefix(clean, tool_names)
                 clean = _strip_mimo_prefix(clean)
                 clean = clean_tool_text(clean)
@@ -555,7 +552,6 @@ async def anthropic_messages(
 
         # 清理模型输出
         content = _strip_tool_result_blocks(content)
-        content = _strip_citations(content)
 
         # 提取工具调用
         tool_calls = None
@@ -668,7 +664,6 @@ async def anthropic_create_batch_ep(request: Request):
         client = MimoClient(account)
         try:
             c, tc, usage, _ = await client.call_api(query, False, model)
-            c = _strip_citations(c)
             message = {"role": "assistant", "content": c}
             if tc:
                 message["reasoning_content"] = tc

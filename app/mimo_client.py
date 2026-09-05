@@ -210,7 +210,7 @@ class MimoClient:
                     if sse_data.get("type") == "text" and sse_data.get("content"):
                         yield sse_data
                     elif "promptTokens" in sse_data:
-                        yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
+                            yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
                                "completionTokens": sse_data.get("completionTokens", 0),
                                "totalTokens": sse_data.get("totalTokens", 0),
                                "nativeUsage": sse_data.get("nativeUsage", {})}
