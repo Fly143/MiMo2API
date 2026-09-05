@@ -219,13 +219,7 @@ public class MainActivity extends AppCompatActivity {
             c.setRequestMethod("GET");
             c.setRequestProperty("Authorization", basic());
             int code = c.getResponseCode();
-            if (code != 200) return false;
-            InputStream in = c.getInputStream();
-            byte[] buf = new byte[1024];
-            int n = in.read(buf);
-            in.close();
-            String body = new String(buf, 0, n, StandardCharsets.UTF_8);
-            return body.contains("\"data\"");
+            return code == 200;
         } catch (IOException e) {
             return false;
         } finally {
