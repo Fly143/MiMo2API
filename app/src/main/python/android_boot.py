@@ -53,6 +53,8 @@ def start(data_dir: str, port: int = 8080):
     def _run():
         try:
             import uvicorn
+            import socket
+            import time
             from app.config import config_manager
             try:
                 config_manager.config_file = cfg
@@ -60,7 +62,22 @@ def start(data_dir: str, port: int = 8080):
             except Exception:
                 pass
             from main import app as fastapi_app
-            _state["running"] = True
+
+            # 等端口真正绑定后再标记 running，避免 Java 侧过早跳转
+            def _wait_port():
+                for _ in range(100):
+                    try:
+                        s = socket.create_connection(("127.0.0.1", port), timeout=0.5)
+                        s.close()
+                        _state["running"] = True
+                        print(f"[MiMo2API] 服务已就绪: http://127.0.0.1:{port}")
+                        return
+                    except (ConnectionRefusedError, OSError):
+                        pass
+                    time.sleep(0.2)
+
+            import threading
+            threading.Thread(target=_wait_port, daemon=True).start()
             uvicorn.run(fastapi_app, host="127.0.0.1", port=port,
                         log_level="info", access_log=False)
         except Exception as e:
