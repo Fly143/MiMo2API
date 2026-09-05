@@ -231,96 +231,6 @@ def _strip_tool_result_blocks(text: str) -> str:
     return cleaned.strip()
 
 
-def _strip_citations(text: str) -> str:
-    """移除 MiMo 模型输出的引用标记，如 (citation:1)、citation:1。"""
-    if not text:
-        return text
-    return re.sub(r'\s*\(citation:\d+\)\s*|\s*citation:\d+\s*', ' ', text).strip()
-
-
-
-
-
-class _StreamCitationBuf:
-    """
-    """
-    def __init__(self):
-        self.chunks = []
-
-    def feed(self, text, citation_map, fmt):
-        """始终缓存，不立即输出。"""
-        if text:
-            self.chunks.append(text)
-        return ""
-
-    def flush_pending(self, citation_map, fmt):
-        """URL 数据到达后调用：把缓存的文本做替换后输出。"""
-        if not self.chunks:
-            return ""
-        combined = "".join(self.chunks)
-        self.chunks = []
-        result = _format_citations(combined, citation_map, fmt)
-        return _strip_citations(result) if result else ""
-
-    def flush(self, citation_map, fmt):
-        """流结束：处理剩余缓存。"""
-        if not self.chunks:
-            return ""
-        combined = "".join(self.chunks)
-        self.chunks = []
-        if citation_map:
-            result = _format_citations(combined, citation_map, fmt)
-            return _strip_citations(result) if result else ""
-        return _strip_citations(combined)
-
-
-def _build_citation_map(citations: list) -> dict:
-    """构建 citation 编号到信息的映射。
-    
-    模型输出的 citation:N 指的是列表中的第 N 条引用（从1开始）。
-    """
-    citation_map = {}
-    for i, cite in enumerate(citations, 1):
-        citation_map[i] = {
-            'url': cite.get('url', ''),
-            'name': cite.get('name', cite.get('siteName', '')),
-            'snippet': cite.get('snippet', cite.get('text', ''))[:200],
-            'site_name': cite.get('siteName', ''),
-        }
-    return citation_map
-
-
-def _format_citations(text: str, citation_map: dict, fmt: str) -> str:
-    """根据格式处理正文中的 citation 标记。"""
-    if not citation_map or fmt == 'none':
-        return _strip_citations(text)
-    
-    # 匹配 (citation:N) 和 citation:N 两种格式
-    pattern = re.compile(r'\(citation:(\d+)\)|citation:(\d+)')
-    
-    if fmt == 'appendix':
-        def repl(m):
-            num = int(m.group(1) or m.group(2))
-            return f'[{num}]' if num in citation_map else ''
-        text = pattern.sub(repl, text)
-        text += '\n\n---\n'
-        for num, info in sorted(citation_map.items()):
-            url = info.get('url', '')
-            name = info.get('name', '')
-            if url:
-                text += f'[{num}] {name}: {url}\n'
-        return text
-    
-    # inline (default)
-    def repl(m):
-        num = int(m.group(1) or m.group(2))
-        if num in citation_map:
-            url = citation_map[num].get('url', '')
-            if url:
-                return f'[{num}]({url})'
-        return ''
-    return pattern.sub(repl, text)
-
 def _camel_case(name: str) -> str:
     """snake_case -> camelCase: web_search -> webSearch"""
     parts = name.split('_')
@@ -360,9 +270,8 @@ def _strip_mimo_prefix(text: str) -> str:
 
 
 def _clean_response_text(text: str, tool_names: list = None) -> str:
-    """综合文本清理管道：TOOL_RESULT + 引用 + 工具前缀 + MiMo前缀 + 工具文本残留。"""
+    """综合文本清理管道：TOOL_RESULT + 工具前缀 + MiMo前缀 + 工具文本残留。"""
     text = _strip_tool_result_blocks(text)
-    text = _strip_citations(text)
     if tool_names:
         text = _strip_tool_name_prefix(text, tool_names)
     text = _strip_mimo_prefix(text)
@@ -624,8 +533,7 @@ async def chat_completions(
                              raw_messages=request.messages if needs_compression else None,
                              raw_tools=tools_dict if needs_compression else None,
                              raw_passthrough=passthrough_mode if needs_compression else None,
-                             effective_model=effective_model,
-                             citation_format=getattr(request, 'citation_format', 'inline') or 'inline'),
+                             effective_model=effective_model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -661,10 +569,6 @@ async def chat_completions(
 
         # 清理模型输出杂质
         content = _strip_tool_result_blocks(content)
-        # 处理 citation 标记
-        citation_fmt = getattr(request, 'citation_format', None) or 'inline'
-        citation_map = _build_citation_map(citations)
-        content = _format_citations(content, citation_map, citation_fmt)
         content = clean_tool_text(content)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -717,7 +621,6 @@ async def _stream_response(
     raw_tools: list = None,
     raw_passthrough: bool = False,
     effective_model: str = None,
-    citation_format: str = "inline",
 ):
     """流式响应生成器。
 
@@ -778,19 +681,8 @@ async def _stream_response(
             buffer = ""
             last_usage = None
 
-            citation_fmt = citation_format or 'inline'
-            citation_map = {}
             pending_text = ""
-            scb = _StreamCitationBuf()
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
-                # 用量事件
-                if sse_data.get("type") == "citations":
-                    citations_data = sse_data.get("data", [])
-                    citation_map = _build_citation_map(citations_data)
-                    flushed = scb.flush_pending(citation_map, citation_fmt)
-                    if flushed:
-                        yield _build_chunk(msg_id, model, created=created_t, content=flushed)
-                    continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -813,10 +705,7 @@ async def _stream_response(
                                         clean = _clean_response_text(ev.data, tool_names)
                                         if clean:
                                             content_buffer_chunks.append(clean)
-                                            if citation_map:
-                                                                                                                                                yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
-                                            else:
-                                                pending_text += clean
+                                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                     elif ev.type == 'tool_calls':
                                         collected_tool_calls.extend(ev.data)
                             in_think = True
@@ -830,10 +719,7 @@ async def _stream_response(
                                     clean = _clean_response_text(ev.data, tool_names)
                                     if clean:
                                         content_buffer_chunks.append(clean)
-                                        if citation_map:
-                                            yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
-                                        else:
-                                            pending_text += clean
+                                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                 elif ev.type == 'tool_calls':
                                     collected_tool_calls.extend(ev.data)
                         buffer = keep
@@ -861,7 +747,7 @@ async def _stream_response(
                         clean = _clean_response_text(ev.data, tool_names)
                         if clean:
                             content_buffer_chunks.append(clean)
-                            yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
                     elif ev.type == 'tool_calls':
                         collected_tool_calls.extend(ev.data)
 
@@ -871,7 +757,7 @@ async def _stream_response(
                     clean = _clean_response_text(ev.data, tool_names)
                     if clean:
                         content_buffer_chunks.append(clean)
-                        yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
                 elif ev.type == 'tool_calls':
                     collected_tool_calls.extend(ev.data)
 
@@ -887,10 +773,6 @@ async def _stream_response(
                 return
 
             # 无工具调用：content 已在流中发出，只需发 stop
-            # Flush citation buffer
-            flushed = scb.flush(citation_map, citation_fmt)
-            if flushed:
-                yield _build_chunk(msg_id, model, created=created_t, content=flushed)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
             if last_usage:
@@ -905,18 +787,8 @@ async def _stream_response(
             in_think = False
             last_usage = None
 
-            citation_fmt = citation_format or 'inline'
-            citation_map = {}
             pending_text = ""
-            scb = _StreamCitationBuf()
             async for sse_data in client.stream_api(query, thinking, model, multi_medias):
-                if sse_data.get("type") == "citations":
-                    citations_data = sse_data.get("data", [])
-                    citation_map = _build_citation_map(citations_data)
-                    flushed = scb.flush_pending(citation_map, citation_fmt)
-                    if flushed:
-                        yield _build_chunk(msg_id, model, created=created_t, content=flushed)
-                    continue
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -934,7 +806,7 @@ async def _stream_response(
                             if safe:
                                 clean = _clean_response_text(safe)
                                 if clean:
-                                    yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                                    yield _build_chunk(msg_id, model, created=created_t, content=clean)
                             in_think = True
                             buffer = buffer[idx + len(THINK_OPEN):]
                             continue
@@ -943,7 +815,7 @@ async def _stream_response(
                         if safe:
                             clean = _clean_response_text(safe)
                             if clean:
-                                yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
                         buffer = keep
                         break
                     else:
@@ -969,12 +841,8 @@ async def _stream_response(
                     if in_think:
                         yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
                     else:
-                        yield _build_chunk(msg_id, model, created=created_t, content=scb.feed(clean, citation_map, citation_fmt))
+                        yield _build_chunk(msg_id, model, created=created_t, content=clean)
 
-            # Flush citation buffer
-            flushed = scb.flush(citation_map, citation_fmt)
-            if flushed:
-                yield _build_chunk(msg_id, model, created=created_t, content=flushed)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
             yield "data: [DONE]\n\n"
             if last_usage:
@@ -1656,12 +1524,15 @@ def _make_response_object(
                     output_text = part.get("text", "") or ""
     usage_obj = None
     if usage:
+        input_tok = usage.get("prompt_tokens") or usage.get("promptTokens") or 0
+        output_tok = usage.get("completion_tokens") or usage.get("completionTokens") or 0
+        total_tok = usage.get("total_tokens") or (input_tok + output_tok)
         usage_obj = {
-            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "input_tokens": int(input_tok),
             "input_tokens_details": {"cached_tokens": 0},
-            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+            "output_tokens": int(output_tok),
             "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": int(usage.get("total_tokens", 0) or 0),
+            "total_tokens": int(total_tok),
         }
     return {
         "id": response_id,
@@ -1883,9 +1754,9 @@ def _count_tokens(text: str) -> int:
 def _build_response_usage(usage: dict | None) -> dict:
     """将 MiMo usage 转换为 Responses API usage 格式。"""
     usage = usage or {}
-    input_tokens = int(usage.get("promptTokens", 0) or usage.get("prompt_tokens", 0) or 0)
-    output_tokens = int(usage.get("completionTokens", 0) or usage.get("completion_tokens", 0) or 0)
-    total_tokens = input_tokens + output_tokens
+    input_tokens = int(usage.get("promptTokens", 0) or usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("completionTokens", 0) or usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0)
+    total_tokens = int(usage.get("total_tokens", 0) or usage.get("totalTokens", 0) or (input_tokens + output_tokens))
     return {
         "input_tokens": input_tokens,
         "input_tokens_details": {"cached_tokens": 0},
@@ -2036,9 +1907,6 @@ async def _do_response_chat(body: dict, account) -> tuple:
 
     # 清理输出
     content = _strip_tool_result_blocks(content)
-    # 处理 citation 标记
-    citation_map = _build_citation_map(citations)
-    content = _format_citations(content, citation_map, "inline")
     content = clean_tool_text(content)
 
     # 额外处理：模型可能输出多个 think 块，_parse_think_tags 只剥除了第一个
@@ -2223,6 +2091,7 @@ async def _stream_response_events(body: dict, account):
 
             async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
                 if sse_data.get("type") == "usage":
+                    api_usage = sse_data
                     continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
@@ -2446,6 +2315,7 @@ async def _stream_response_events(body: dict, account):
 
             async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
                 if sse_data.get("type") == "usage":
+                    api_usage = sse_data
                     continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
