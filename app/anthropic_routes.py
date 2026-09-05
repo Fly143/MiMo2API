@@ -113,7 +113,7 @@ def _make_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _make_message_start(model: str, msg_id: str) -> str:
+def _make_message_start(model: str, msg_id: str, usage: dict = None) -> str:
     return _make_sse("message_start", {
         "type": "message_start",
         "message": {
@@ -124,7 +124,7 @@ def _make_message_start(model: str, msg_id: str) -> str:
             "model": model,
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {"input_tokens": usage.get("promptTokens", 0) if usage else 0, "output_tokens": 0},
         },
     })
 
@@ -155,11 +155,11 @@ def _make_cb_stop(index: int) -> str:
     })
 
 
-def _make_message_delta(stop_reason: str = "end_turn") -> str:
+def _make_message_delta(stop_reason: str = "end_turn", usage: dict = None) -> str:
     return _make_sse("message_delta", {
         "type": "message_delta",
         "delta": {"stop_reason": stop_reason},
-        "usage": {"output_tokens": 0},
+        "usage": {"output_tokens": usage.get("completionTokens", 0) if usage else 0},
     })
 
 
@@ -205,7 +205,8 @@ async def _anthropic_stream_think_wrapper(
     """
     st = _StreamState()
     has_tools = tool_names is not None
-    yield _make_message_start(model, msg_id)
+    api_usage = {}
+    yield _make_message_start(model, msg_id, api_usage)
 
     # 有工具时创建 StreamSieve 实时筛分 TOOL_CALL
     sieve = None
@@ -255,8 +256,10 @@ async def _anthropic_stream_think_wrapper(
             events.extend(_emit_text(clean))
         return events
 
+    api_usage = {}
     async for ev in mimo_stream:
         if ev.get("type") == "usage":
+            api_usage = ev
             continue
         chunk = ev.get("content", "")
         if not chunk:
@@ -383,7 +386,7 @@ async def _anthropic_stream_think_wrapper(
             yield _make_cb_stop(st.text_index)
             st.text_active = False
 
-    yield _make_message_delta(stop_reason)
+    yield _make_message_delta(stop_reason, api_usage)
     yield _make_message_stop()
 
 
