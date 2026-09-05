@@ -159,7 +159,10 @@ def _make_message_delta(stop_reason: str = "end_turn", usage: dict = None) -> st
     return _make_sse("message_delta", {
         "type": "message_delta",
         "delta": {"stop_reason": stop_reason},
-        "usage": {"output_tokens": usage.get("completionTokens", 0) if usage else 0},
+        "usage": {
+            "input_tokens": usage.get("promptTokens", 0) if usage else 0,
+            "output_tokens": usage.get("completionTokens", 0) if usage else 0,
+        },
     })
 
 
