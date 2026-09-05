@@ -213,11 +213,19 @@ public class MainActivity extends AppCompatActivity {
     private boolean ping() {
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(BASE + "/").openConnection();
-            c.setConnectTimeout(800);
-            c.setReadTimeout(800);
+            c = (HttpURLConnection) new URL(BASE + "/v1/models").openConnection();
+            c.setConnectTimeout(2000);
+            c.setReadTimeout(2000);
             c.setRequestMethod("GET");
-            return c.getResponseCode() > 0;   // 401 也表示已就绪
+            c.setRequestProperty("Authorization", basic());
+            int code = c.getResponseCode();
+            if (code != 200) return false;
+            InputStream in = c.getInputStream();
+            byte[] buf = new byte[1024];
+            int n = in.read(buf);
+            in.close();
+            String body = new String(buf, 0, n, StandardCharsets.UTF_8);
+            return body.contains("\"data\"");
         } catch (IOException e) {
             return false;
         } finally {
