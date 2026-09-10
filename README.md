@@ -154,6 +154,27 @@ python main.py
 
 启动后访问：**http://localhost:8080**
 
+### 管理后台
+
+| 项 | 默认值 |
+|----|--------|
+| 地址 | http://localhost:8080 |
+| 用户名 | `admin`（固定） |
+| 密码 | `admin`（`config.json` → `admin_password`） |
+| 调用 API Key | `sk-mimo`（`config.json` → `api_keys`） |
+
+浏览器会弹出 HTTP Basic 登录框；curl 用 `-u admin:admin`。
+
+**修改密码 / API Key：**
+
+```bash
+curl -u admin:admin -X POST http://localhost:8080/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"admin_password":"你的新密码","api_keys":"sk-新key"}'
+```
+
+只传要改的字段即可，不会清空已导入账号。落盘为 `enc:v1:` 密文，不要手改密文文件。
+
 ## 配置凭证
 
 打开管理面板 http://localhost:8080 进行配置。

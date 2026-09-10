@@ -228,35 +228,37 @@ class ConfigManager:
             return account
 
     def update_config(self, new_config: dict):
-        """管理面板更新。敏感字段若传入 *** 或 enc: 前缀，保留原值。"""
+        """局部更新。敏感字段传入 *** / enc: / 空 时保留原值；未传入的键也保留。"""
         with self.lock:
-            old_by_uid = {a.user_id: a for a in self.config.mimo_accounts}
-            accounts = []
-            for acc in new_config.get("mimo_accounts", []):
-                fields = {k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__}
-                st = fields.get("service_token", "")
-                uid = fields.get("user_id", "")
-                ph = fields.get("xiaomichatbot_ph", "")
-                # 掩码/密文不覆盖内存明文
-                prev = old_by_uid.get(uid)
-                if prev:
-                    if st in ("***", "", None) or (isinstance(st, str) and st.startswith(ENC_PREFIX)):
-                        fields["service_token"] = prev.service_token
-                    if ph in ("***", "", None) or (isinstance(ph, str) and ph.startswith(ENC_PREFIX)):
-                        fields["xiaomichatbot_ph"] = prev.xiaomichatbot_ph
-                accounts.append(MimoAccount(**fields))
+            if "mimo_accounts" in new_config:
+                old_by_uid = {a.user_id: a for a in self.config.mimo_accounts}
+                accounts = []
+                for acc in new_config.get("mimo_accounts") or []:
+                    fields = {k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__}
+                    st = fields.get("service_token", "")
+                    uid = fields.get("user_id", "")
+                    ph = fields.get("xiaomichatbot_ph", "")
+                    prev = old_by_uid.get(uid)
+                    if prev:
+                        if st in ("***", "", None) or (isinstance(st, str) and st.startswith(ENC_PREFIX)):
+                            fields["service_token"] = prev.service_token
+                        if ph in ("***", "", None) or (isinstance(ph, str) and ph.startswith(ENC_PREFIX)):
+                            fields["xiaomichatbot_ph"] = prev.xiaomichatbot_ph
+                    accounts.append(MimoAccount(**fields))
+            else:
+                accounts = self.config.mimo_accounts
 
             pw = new_config.get("admin_password", self.config.admin_password)
             if pw in ("***", "", None) or (isinstance(pw, str) and pw.startswith(ENC_PREFIX)):
                 pw = self.config.admin_password
 
             self.config = Config(
-                api_keys=new_config.get("api_keys", DEFAULT_API_KEYS),
+                api_keys=new_config.get("api_keys", self.config.api_keys),
                 admin_password=pw,
                 mimo_accounts=accounts,
-                models=new_config.get("models", []),
-                tools_passthrough=new_config.get("tools_passthrough", DEFAULT_TOOLS_PASSTHROUGH),
-                compression_mode=new_config.get("compression_mode", DEFAULT_COMPRESSION_MODE),
+                models=new_config.get("models", self.config.models),
+                tools_passthrough=new_config.get("tools_passthrough", self.config.tools_passthrough),
+                compression_mode=new_config.get("compression_mode", self.config.compression_mode),
             )
             self.save()
 
