@@ -1,3 +1,21 @@
+# 更新日志（Changelog）
+
+本文件记录 MiMo2API 的所有重要变更。
+
+## [v2.6.0] — 2026-09-11
+
+### 安全
+- **凭证加密落盘** — `serviceToken` / `userId` / `xiaomichatbot_ph` / `admin_password` 使用 Fernet 加密（`enc:v1:`），密钥在 `.secret_key`；旧明文配置自动迁移
+- **导入探活无残留** — Cookie/cURL 导入与测试连接使用临时 conversation，验证后删除，不在账号里留下 `hi` 会话
+- **`/api/config` 局部更新** — 只传要改的字段，不会清空已导入账号
+
+### 修复
+- **Anthropic 模型映射** — 补全 Claude 4.7 / 4.5 别名；支持 `-YYYYMMDD` / `-latest` 后缀；未知 `claude-*` 启发式落到 2.5 系列（仅映射 `mimo-v2.5` / `mimo-v2.5-pro`）
+
+### 文档 / 仓库
+- README 补充管理后台默认账号密码、改密方式、`.secret_key` 备份说明
+- 停止跟踪本地 `usage.json`
+
 ## [v2.2.5] — 2026-05-12
 
 ### 新增
@@ -8,10 +26,6 @@
 
 ### Fixed
 - **换行符保留** — `clean_tool_text` 不再 strip 末尾空白
-
-# 更新日志（Changelog）
-
-本文件记录 MiMo2API 的所有重要变更。
 
 ## [v2.2.3] — 2026-05-11
 
