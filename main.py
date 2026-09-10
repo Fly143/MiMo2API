@@ -105,6 +105,7 @@ def main():
     """主函数"""
     # 获取端口配置
     port = int(os.getenv("PORT", "8080"))
+    host = os.getenv("HOST", "0.0.0.0")
 
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
@@ -113,10 +114,10 @@ def main():
 ╚══════════════════════════════════════════════════════════╝
 
 🚀 服务器启动中...
-📍 地址: http://localhost:{port}
-📊 管理界面: http://localhost:{port}
-📡 API端点: http://localhost:{port}/v1/chat/completions
-📖 API文档: http://localhost:{port}/docs
+📍 地址: http://{host}:{port}
+📊 管理界面: http://{host}:{port}
+📡 API端点: http://{host}:{port}/v1/chat/completions
+📖 API文档: http://{host}:{port}/docs
 
 配置信息:
   - API Keys: {len(config_manager.config.api_keys.split(','))} 个
@@ -128,7 +129,7 @@ def main():
     # 启动服务器
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host=host,
         port=port,
         log_level="info"
     )
