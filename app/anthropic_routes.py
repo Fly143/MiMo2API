@@ -63,40 +63,78 @@ router = APIRouter()
 # Claude Code CLI 等工具期望 Anthropic 风格的模型名，MiMo 原生名不兼容。
 # 此映射表在 Anthropic 端点请求时自动转换。
 # ⚠️ 仅映射到 2.5 系列，使用旧版模型可能导致账号被封禁。
+# 目标：opus 级 → mimo-v2.5-pro；sonnet/haiku 级 → mimo-v2.5
 ANTHROPIC_MODEL_ALIASES = {
-    # Claude 4.x 当前
+    # Claude 4.7
+    "claude-opus-4-7": "mimo-v2.5-pro",
+    "claude-sonnet-4-7": "mimo-v2.5",
+    "claude-haiku-4-7": "mimo-v2.5",
+    # Claude 4.6
     "claude-opus-4-6": "mimo-v2.5-pro",
     "claude-sonnet-4-6": "mimo-v2.5",
-    "claude-haiku-4-5": "mimo-v2.5",
-    # Claude 4.x 历史
+    "claude-haiku-4-6": "mimo-v2.5",
+    # Claude 4.5
+    "claude-opus-4-5": "mimo-v2.5-pro",
     "claude-sonnet-4-5": "mimo-v2.5",
+    "claude-haiku-4-5": "mimo-v2.5",
+    # Claude 4.0 / 4.1
     "claude-opus-4-1": "mimo-v2.5-pro",
     "claude-opus-4-0": "mimo-v2.5-pro",
     "claude-sonnet-4-0": "mimo-v2.5",
+    "claude-haiku-4-0": "mimo-v2.5",
     # Claude 3.x
     "claude-3-7-sonnet": "mimo-v2.5",
     "claude-3-5-sonnet": "mimo-v2.5",
     "claude-3-opus": "mimo-v2.5-pro",
     "claude-3-sonnet": "mimo-v2.5",
     "claude-3-haiku": "mimo-v2.5",
-    # Search / nothinking 变体（MiMo 无联网/思考概念，映射到同一基础模型）
+    # Search / nothinking / thinking 变体
+    "claude-opus-4-7-search": "mimo-v2.5-pro",
     "claude-opus-4-6-search": "mimo-v2.5-pro",
+    "claude-sonnet-4-7-search": "mimo-v2.5",
     "claude-sonnet-4-6-search": "mimo-v2.5",
+    "claude-sonnet-4-7-nothinking": "mimo-v2.5",
     "claude-sonnet-4-6-nothinking": "mimo-v2.5",
     "claude-haiku-4-5-nothinking": "mimo-v2.5",
+    "claude-sonnet-4-7-thinking": "mimo-v2.5",
+    "claude-opus-4-7-thinking": "mimo-v2.5-pro",
 }
 
 
 def _resolve_anthropic_model(model: str) -> str:
     """将 Anthropic 风格模型名映射为 MiMo 内部模型名。
-    
-    如果模型名已经是 MiMo 原生名（mimo-*），直接返回。
-    如果在映射表中，返回对应的 MiMo 名。
-    否则返回原值。
+
+    - 已是 mimo-* → 原样返回
+    - 表内精确匹配 → 对应 2.5 型号
+    - 带日期后缀（claude-sonnet-4-6-20250929）→ 去掉日期再匹配
+    - 未知 claude-* 启发式：含 opus → v2.5-pro，其余 → v2.5
+    - 其它原样返回
     """
-    if not model or model.startswith("mimo-"):
+    if not model:
         return model
-    return ANTHROPIC_MODEL_ALIASES.get(model.lower(), model)
+    m = model.lower().strip()
+    if m.startswith("mimo-"):
+        return m
+
+    if m in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[m]
+
+    # 去掉 -YYYYMMDD / -YYYY-MM-DD 日期后缀
+    base = re.sub(r"-\d{8}$", "", m)
+    base = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", base)
+    if base in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[base]
+
+    # 去掉 -latest / @latest
+    base = re.sub(r"[-@]latest$", "", base)
+    if base in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[base]
+
+    # 未知 Claude 名：启发式落到 2.5 系列
+    if m.startswith("claude-"):
+        return "mimo-v2.5-pro" if "opus" in m else "mimo-v2.5"
+
+    return model
 
 # ─── 常量 ─────────────────────────────────────────────────────
 
