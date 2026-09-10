@@ -113,10 +113,13 @@ chmod +x deploy.sh
 ### Docker 部署
 
 ```bash
-docker run -d -p 8080:8080 -v $(pwd)/config.json:/app/config.json ghcr.io/fly143/mimo2api:latest
+docker run -d -p 8080:8080 \
+  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/.secret_key:/app/.secret_key \
+  ghcr.io/fly143/mimo2api:latest
 ```
 
-或使用 docker-compose：
+或使用 docker-compose（`config.json` 与 `.secret_key` 需一起挂载）：
 
 ```yaml
 services:
@@ -126,6 +129,7 @@ services:
       - "8080:8080"
     volumes:
       - ./config.json:/app/config.json
+      - ./.secret_key:/app/.secret_key
     restart: unless-stopped
 ```
 
@@ -180,6 +184,17 @@ python main.py
 - 每个请求从账号池取下一个 → 降低单账号限频风险
 - 支持测试连接、删除、替换已有账号
 - 同一个 userId 重复导入会自动更新（不重复添加）
+
+导入 / 测试连接会在上游开一条**临时会话**发最小消息验证，成功后立刻删除该会话，不会在账号里留下 `hi` 记录。
+
+### 凭证加密存储
+
+`serviceToken` / `userId` / `xiaomichatbot_ph` / `admin_password` 落盘时用 **Fernet** 加密（`enc:v1:` 前缀），密钥在同目录 **`.secret_key`**。
+
+- 两个文件都已在 `.gitignore`
+- 首次保存自动生成 `.secret_key`
+- 旧明文 `config.json` 启动时自动迁移为密文
+- **备份时必须同时备份 `config.json` 和 `.secret_key`**，丢了密钥密文无法恢复
 
 ## API 使用
 
@@ -925,7 +940,8 @@ MiMo2API/
 ├── deploy.sh                # 一键部署脚本（安装依赖、初始化配置）
 ├── requirements.txt         # Python 依赖
 ├── config.example.json      # 配置文件模板
-├── config.json              # 实际配置（.gitignore，含凭证）
+├── config.json              # 实际配置（.gitignore，敏感字段已加密）
+├── .secret_key              # Fernet 密钥（.gitignore，与 config.json 一起备份）
 ├── app/
     ├── __init__.py
     ├── routes.py            # API 路由（chat/models/管理面板/账号CRUD）
@@ -952,11 +968,12 @@ MiMo2API/
 ```json
 {
   "api_keys": "sk-mimo,sk-another",
+  "admin_password": "enc:v1:gAAAAA...",
   "mimo_accounts": [
     {
-      "service_token": "eyJ...",
-      "user_id": "123456",
-      "xiaomichatbot_ph": "abc123...",
+      "service_token": "enc:v1:gAAAAA...",
+      "user_id": "enc:v1:gAAAAA...",
+      "xiaomichatbot_ph": "enc:v1:gAAAAA...",
       "is_valid": true,
       "login_time": "04-26 17:00",
       "last_test": "04-26 17:05"
@@ -965,6 +982,8 @@ MiMo2API/
   "models": []
 }
 ```
+
+敏感字段写盘时自动加密；管理 API 只返回掩码，不回传完整 token。
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
@@ -981,6 +1000,7 @@ MiMo2API/
 - uvicorn 0.32
 - httpx 0.27
 - Pydantic v1
+- cryptography（配置加密）
 
 ```bash
 pip install -r requirements.txt
