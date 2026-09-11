@@ -16,14 +16,14 @@ from app.batch import init_batch_storage as init_anthropic_batches
 app = FastAPI(
     title="Mimo2API",
     description="将小米 Mimo AI 转换为 OpenAI + Anthropic 兼容 API（Chat / Responses / Anthropic Messages）",
-    version="2.6.4"
+    version="2.6.5"
 )
 
 # 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
