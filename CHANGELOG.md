@@ -2,6 +2,16 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.3] — 2026-09-11
+
+### 修复
+- **清理 Chaquopy 打包产物副本 `app/src/`** — 该目录是 `MiMo2API-android/` 项目
+  的 Chaquopy 源码布局（`src/main/<sourceSet>/`）被错误复制到本仓：被跟踪的 8 个文件
+  都是旧版本副本或空文件（`mimo_client.py`/`routes.py` 各 0 行），与根 `app/*.py` 重复且滞后，
+  仓内代码/文档零引用。
+  处理：`git rm -r app/src`（磁盘同步清理）+ `.gitignore` 加入 `app/src/`。
+  体积减少 701K；仓克隆与索引均不再被污染。
+
 ## [v1.0.3] — 2026-09-11
 
 ### 修复

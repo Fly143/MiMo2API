@@ -9,6 +9,7 @@ app/responses.json
 test_tts.wav
 .gradle/
 app/build/
+app/src/
 *.apk
 *.bak
 fix_partial.py
