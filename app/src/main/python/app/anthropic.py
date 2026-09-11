@@ -185,7 +185,8 @@ def convert_request(body: dict) -> dict:
     """将完整的 Anthropic Messages API 请求体转换为 OpenAI Chat Completions 格式。"""
     model = body.get("model", "deepseek-default")
     stream = body.get("stream", False)
-    max_tokens = body.get("max_tokens", 4096)
+    # 不猜 max_tokens：未显式指定时透传，由上游/模型自行决定输出长度。
+    max_tokens = body.get("max_tokens")
     system = body.get("system", None)
     messages = body.get("messages", [])
     tools = body.get("tools", None)
@@ -200,8 +201,10 @@ def convert_request(body: dict) -> dict:
         "model": model,
         "messages": openai_msg,
         "stream": stream,
-        "max_tokens": max_tokens,
     }
+
+    if max_tokens is not None:
+        result["max_tokens"] = max_tokens
 
     if openai_tools:
         result["tools"] = openai_tools
@@ -616,7 +619,15 @@ async def stream_response(
             yield _make_thinking_stop(state)
         if state.text_active:
             yield _make_text_stop(state)
-        yield _make_message_delta(state, "end_turn", 0)
+        # 异常收尾同样要下发已攒好的 tool_use，否则工具调用被静默丢弃
+        if tool_call_slots:
+            for idx in sorted(tool_call_slots.keys()):
+                slot = tool_call_slots[idx]
+                yield _make_tool_use_start(state, slot["name"], slot["id"])
+                if slot["arguments"]:
+                    yield _make_tool_input_delta(state, slot["arguments"], slot["id"])
+                yield _make_tool_use_stop(state, slot["id"])
+        yield _make_message_delta(state, "tool_use" if tool_call_slots else "end_turn", 0)
         yield _make_message_stop()
 
 

@@ -16,8 +16,8 @@ android {
         applicationId "com.mimo2api.app"
         minSdk 24
         targetSdk 35
-        versionCode 10
-        versionName "2.6.0"
+        versionCode 11
+        versionName "2.6.5"
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -27,6 +27,7 @@ android {
             version "3.11"
 
             pip {
+                options "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple"
                 install "fastapi==0.115.5"
                 install "uvicorn==0.32.1"
                 install "httpx==0.27.2"

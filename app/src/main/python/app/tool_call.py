@@ -42,10 +42,23 @@ def _safe_get(d: Any, key: str, default: Any = None) -> Any:
 # ─── 构建工具提示词 ──────────────────────────────────────────
 
 def build_tool_prompt(tools: List[Dict[str, Any]], passthrough: bool = False) -> str:
-    """构建 MiMoML 工具提示词，动态提取客户端 tools 的名称和描述。
+    """构建 MiMoML 工具提示词。
 
-    passthrough=True 时跳过格式说明书，直接嵌入原始工具定义 JSON，
-    适合 Roo Code / Cline 等自带工具定义的客户端，减少格式冲突。
+    MiMo 网页端上游不支持原生 OpenAI `tools`/`tool_calls` 协议——
+    mimo_client._query_body 不消费 tools 字段，模型只在正文里输出
+    `<|MiMoML|tool_calls>...</|>` 文本，路由层用 extract_tool_call 解析。
+
+    passthrough=True：仍走文本协议，但跳过冗长的 MiMoML 格式说明书，
+      直接嵌入原始工具 JSON + 简短英文指令，让模型按客户端的偏好
+      （TOOL_CALL: / <|MiMoML|> / 自有格式）自由输出。适合 Roo Code / Cline
+      等自带工具语义的客户端，减少格式冲突。
+
+    passthrough=False：在 prompt 中嵌入完整的 MiMoML 格式说明书，
+      强制模型用 `<|MiMoML|tool_calls>...</|>` 输出。
+
+    注：与 workbuddy-desktop-api / xiaomi-mimo-desktop-api 的 passthrough=True
+    含义不同——后者上游已原生支持 OpenAI tool_calls，passthrough=True 直接
+    return ""，完全不塞 prompt 指令。
     """
     if not tools:
         return ""
