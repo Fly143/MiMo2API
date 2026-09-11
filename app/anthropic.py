@@ -185,7 +185,8 @@ def convert_request(body: dict) -> dict:
     """将完整的 Anthropic Messages API 请求体转换为 OpenAI Chat Completions 格式。"""
     model = body.get("model", "deepseek-default")
     stream = body.get("stream", False)
-    max_tokens = body.get("max_tokens", 4096)
+    # 不猜 max_tokens：未显式指定时透传，由上游/模型自行决定输出长度。
+    max_tokens = body.get("max_tokens")
     system = body.get("system", None)
     messages = body.get("messages", [])
     tools = body.get("tools", None)
@@ -200,8 +201,10 @@ def convert_request(body: dict) -> dict:
         "model": model,
         "messages": openai_msg,
         "stream": stream,
-        "max_tokens": max_tokens,
     }
+
+    if max_tokens is not None:
+        result["max_tokens"] = max_tokens
 
     if openai_tools:
         result["tools"] = openai_tools
