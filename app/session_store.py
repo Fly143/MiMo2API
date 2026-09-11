@@ -177,7 +177,12 @@ def update_fingerprint(account_id: str, conversation_id: str, messages: list) ->
 
 
 def update_tokens(account_id: str, conversation_id: str, prompt_tokens: int) -> None:
-    """更新会话的累积 token 计数。"""
+    """记录会话的上下文 token 峰值。
+
+    上游返回的 prompt_tokens 是「本次请求的完整上下文长度」（已含历史），并非增量；
+    累加会随轮次线性放大，导致真实上下文远未达上限就触碰 TOKEN_THRESHOLD 而清屏
+    重建会话、丢失多轮上下文。这里取峰值。
+    """
     if not prompt_tokens:
         return
     db = _load()
@@ -185,7 +190,7 @@ def update_tokens(account_id: str, conversation_id: str, prompt_tokens: int) -> 
     sessions = db.get(key, [])
     for s in sessions:
         if s['conversation_id'] == conversation_id:
-            s['prompt_tokens'] = s.get('prompt_tokens', 0) + prompt_tokens
+            s['prompt_tokens'] = max(s.get('prompt_tokens', 0), prompt_tokens)
             s['last_used'] = time.time()
             break
     _save({**db, key: sessions})

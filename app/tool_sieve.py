@@ -169,7 +169,9 @@ class StreamSieve:
                 return text, ""
             # 检查是否可能是工具调用标记前缀
             for tag in self._TOOL_STARTS:
-                if tag.startswith(tail) or tail == tag[:len(tail)]:
+                # 大小写不敏感：标记为大写常量，模型可能输出小写
+                tag_lower = tag.lower()
+                if tag_lower.startswith(tail_lower) or tail_lower == tag_lower[:len(tail_lower)]:
                     return text[:i], tail
         return text, ""
 

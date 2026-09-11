@@ -616,7 +616,15 @@ async def stream_response(
             yield _make_thinking_stop(state)
         if state.text_active:
             yield _make_text_stop(state)
-        yield _make_message_delta(state, "end_turn", 0)
+        # 异常收尾同样要下发已攒好的 tool_use，否则工具调用被静默丢弃
+        if tool_call_slots:
+            for idx in sorted(tool_call_slots.keys()):
+                slot = tool_call_slots[idx]
+                yield _make_tool_use_start(state, slot["name"], slot["id"])
+                if slot["arguments"]:
+                    yield _make_tool_input_delta(state, slot["arguments"], slot["id"])
+                yield _make_tool_use_stop(state, slot["id"])
+        yield _make_message_delta(state, "tool_use" if tool_call_slots else "end_turn", 0)
         yield _make_message_stop()
 
 
