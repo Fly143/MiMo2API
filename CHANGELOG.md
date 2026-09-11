@@ -2,6 +2,18 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.4] — 2026-09-11
+
+### 文档
+- **`build_tool_prompt` 注释与代码一致性修正** — 之前注释说
+  "passthrough=True 时跳过格式说明书，直接嵌入原始工具定义 JSON"，但代码同时在 prompt 里塞了
+  一段英文指令引导模型用原生格式（实际 MiMo 网页端上游根本不支持原生 tool_calls，prompt 必须
+  引导模型输出文本协议标记）。
+  重写注释：明确 passthrough=True 仍走文本协议（只是简化格式说明书 + 嵌入工具 JSON），
+  passthrough=False 走完整 MiMoML 说明书。
+  与 workbuddy-desktop-api / xiaomi-mimo-desktop-api 的 passthrough=True 语义不同：
+  后两者上游原生支持 OpenAI tool_calls，passthrough=True 直接 return ""。
+
 ## [v2.6.3] — 2026-09-11
 
 ### 修复
