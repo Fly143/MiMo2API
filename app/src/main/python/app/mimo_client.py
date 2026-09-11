@@ -193,13 +193,6 @@ class MimoClient:
                     if not isinstance(sse_data, dict):
                         continue
 
-                    # DEBUG 日志（已关闭）
-                    # try:
-                    #     with open('/data/data/com.termux/files/home/MiMo2API/debug_api.log', 'a') as _df:
-                    #         _df.write(f"[SSE #{chunk_count}] type={sse_data.get('type','?')} content={repr(sse_data.get('content',''))[:200]} keys={list(sse_data.keys())}\n")
-                    # except Exception:
-                    #     pass
-
                     # 过滤 MiMo 原生 SSE 前缀事件（如 SSE #2 的 'webSearch'）
                     if sse_data.get("type") == "text" and sse_data.get("content"):
                         content_val = sse_data["content"].strip()
@@ -210,7 +203,7 @@ class MimoClient:
                     if sse_data.get("type") == "text" and sse_data.get("content"):
                         yield sse_data
                     elif "promptTokens" in sse_data:
-                            yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
+                        yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
                                "completionTokens": sse_data.get("completionTokens", 0),
                                "totalTokens": sse_data.get("totalTokens", 0),
                                "nativeUsage": sse_data.get("nativeUsage", {})}

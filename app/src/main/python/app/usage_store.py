@@ -5,8 +5,7 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-import os as _os
-_USAGE_FILE = Path(_os.environ.get("MIMO_DATA_DIR", str(Path(__file__).parent.parent))) / "usage.json"
+_USAGE_FILE = Path(__file__).parent.parent / "usage.json"
 _LOCK = threading.Lock()
 
 

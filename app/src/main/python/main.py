@@ -12,14 +12,12 @@ from app.config import config_manager
 from app.anthropic_routes import router as anthropic_router
 from app.batch import init_batch_storage as init_anthropic_batches
 
-# 创建FastAPI应用
 app = FastAPI(
     title="Mimo2API",
     description="将小米 Mimo AI 转换为 OpenAI + Anthropic 兼容 API（Chat / Responses / Anthropic Messages）",
-    version="2.4.0"
+    version="2.6.0"
 )
 
-# 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,14 +31,12 @@ async def startup_discover_models():
     import os as _anthropic_os
     from app.batch import init_batch_storage as _mimo_init_batch_storage
     _mimo_init_batch_storage(_anthropic_os.path.join(_anthropic_os.path.dirname(_anthropic_os.path.abspath(__file__)), ".anthropic_batches"))
-    """服务启动时预探测模型，避免首次请求返回3个硬编码模型"""
     try:
         await _do_discover()
-        print("✅ 模型预探测完成")
+        print("模型预探测完成")
     except Exception as e:
-        print(f"⚠️ 模型预探测失败（不影响服务）: {e}")
+        print(f"模型预探测失败（不影响服务）: {e}")
 
-    # 后台清理过期会话（避免风控）
     print("[启动] 后台清理过期会话...")
     import threading
     threading.Thread(target=_cleanup_old_sessions, daemon=True).start()
@@ -86,52 +82,28 @@ def _cleanup_old_sessions():
     asyncio.run(_run())
 
 
-# 注册路由
 app.include_router(router)
 app.include_router(anthropic_router)
 
-# 初始化 Anthropic batch 存储
 import os
 _anthropic_batch_dir = os.path.join(os.path.dirname(__file__), ".anthropic_batches")
 init_anthropic_batches(_anthropic_batch_dir)
 
-# 静态文件目录
 web_dir = Path(__file__).parent / "web"
-
-# 管理页面由 routes.py 中的 router 处理（/ 和 /admin）
 
 
 def main():
-    """主函数"""
-    # 获取端口配置
     port = int(os.getenv("PORT", "8080"))
+    host = os.getenv("HOST", "0.0.0.0")
 
     print(f"""
-╔══════════════════════════════════════════════════════════╗
-║                    Mimo2API Python                       ║
-║          将小米 Mimo AI 转换为 OpenAI 兼容 API           ║
-╚══════════════════════════════════════════════════════════╝
-
-🚀 服务器启动中...
-📍 地址: http://localhost:{port}
-📊 管理界面: http://localhost:{port}
-📡 API端点: http://localhost:{port}/v1/chat/completions
-📖 API文档: http://localhost:{port}/docs
-
-配置信息:
-  - API Keys: {len(config_manager.config.api_keys.split(','))} 个
-  - Mimo账号: {len(config_manager.config.mimo_accounts)} 个
-
-按 Ctrl+C 停止服务器
+Mimo2API Android/Python
+  地址: http://{host}:{port}
+  管理: http://{host}:{port}
+  API:  http://{host}:{port}/v1/chat/completions
 """)
 
-    # 启动服务器
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info"
-    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

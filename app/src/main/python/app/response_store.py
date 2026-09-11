@@ -4,8 +4,7 @@ import json
 import threading
 from pathlib import Path
 
-import os as _os
-_STORE_FILE = Path(_os.environ.get("MIMO_DATA_DIR", str(Path(__file__).parent))) / "responses.json"
+_STORE_FILE = Path(__file__).parent / "responses.json"
 _LOCK = threading.Lock()
 
 

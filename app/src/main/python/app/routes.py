@@ -1248,6 +1248,17 @@ async def import_curl(request: Request, username: str = Depends(verify_admin)):
     return await _validate_and_save(st_m.group(1), uid_m.group(1), ph_m.group(1))
 
 
+async def _probe_account(client) -> str:
+    """无残留探活：临时会话发一条最小消息，成功后立刻删掉该会话。"""
+    probe_conv = uuid.uuid4().hex[:32]
+    content, _, _, _ = await client.call_api("hi", False, conversation_id=probe_conv)
+    try:
+        await client.delete_conversations([probe_conv])
+    except Exception:
+        pass  # 删除失败不影响探活结论
+    return content or ""
+
+
 async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph: str):
     from .mimo_client import MimoClient, MimoApiError
 
@@ -1255,7 +1266,7 @@ async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph:
     client = MimoClient(account)
 
     try:
-        content, _, _, _ = await client.call_api("hi", False)
+        content = await _probe_account(client)
         now = _dt.now().strftime("%m-%d %H:%M")
 
         existing = False
@@ -1304,7 +1315,7 @@ async def test_account(idx: int, username: str = Depends(verify_admin)):
     client = MimoClient(acc)
 
     try:
-        content, _, _, _ = await client.call_api("hi", False)
+        content = await _probe_account(client)
         acc.is_valid = True
         acc.last_test = _dt.now().strftime("%m-%d %H:%M")
         config_manager.save()
