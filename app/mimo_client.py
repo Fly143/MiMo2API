@@ -27,7 +27,10 @@ class MimoClient:
     """Mimo API客户端"""
 
     API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
-    TIMEOUT = float(os.getenv("MIMO_CLIENT_TIMEOUT", "600"))
+    # 主对话 HTTP 超时（秒）。默认 0 = 不限：思考+输出整条流纯透传，不设代理侧时限。
+    # 需要保护时显式设 MIMO_CLIENT_TIMEOUT=600 等。
+    _t = float(os.getenv("MIMO_CLIENT_TIMEOUT", "0") or "0")
+    TIMEOUT = None if _t <= 0 else _t
 
     # MiMo API 原生 SSE 事件前缀（始终在 SSE #2 输出，独立于我们的工具定义）
     _MIMO_SSE_PREFIXES = {'webSearch', 'getTime', 'getTimeInfo', 'sessionSearch',
