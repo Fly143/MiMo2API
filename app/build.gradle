@@ -16,8 +16,8 @@ android {
         applicationId "com.mimo2api.app"
         minSdk 24
         targetSdk 35
-        versionCode 11
-        versionName "2.6.5"
+        versionCode 12
+        versionName "2.6.6"
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -41,8 +41,6 @@ android {
         }
     }
 
-    // 签名：仓库无 keystore（敏感）。存在 release.keystore 时用 release 签名，
-    // 不存在时回退 debug 签名，保证 clone 后可直接构建安装。
     def hasReleaseKey = file('../release.keystore').exists()
     signingConfigs {
         release {
