@@ -1,4 +1,4 @@
-﻿"""Mimo2API Python鐗堟湰 - 涓荤▼搴忓叆鍙?""
+"""Mimo2API Python版本 - 主程序入口"""
 
 import os
 import uvicorn
@@ -12,14 +12,15 @@ from app.config import config_manager
 from app.anthropic_routes import router as anthropic_router
 from app.batch import init_batch_storage as init_anthropic_batches
 
-# 鍒涘缓FastAPI搴旂敤
+# 创建FastAPI应用
 app = FastAPI(
     title="Mimo2API",
-    description="灏嗗皬绫?Mimo AI 杞崲涓?OpenAI + Anthropic 鍏煎 API锛圕hat / Responses / Anthropic Messages锛?,
+    description="将小米 Mimo AI 转换为 OpenAI + Anthropic 兼容 API（Chat / Responses / Anthropic Messages）",
     version="2.6.6"
 )
 
-# 娣诲姞CORS涓棿浠?app.add_middleware(
+# 添加CORS中间件
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
@@ -32,21 +33,21 @@ async def startup_discover_models():
     import os as _anthropic_os
     from app.batch import init_batch_storage as _mimo_init_batch_storage
     _mimo_init_batch_storage(_anthropic_os.path.join(_anthropic_os.path.dirname(_anthropic_os.path.abspath(__file__)), ".anthropic_batches"))
-    """鏈嶅姟鍚姩鏃堕鎺㈡祴妯″瀷锛岄伩鍏嶉娆¤姹傝繑鍥?涓‖缂栫爜妯″瀷"""
+    """服务启动时预探测模型，避免首次请求返回3个硬编码模型"""
     try:
         await _do_discover()
-        print("鉁?妯″瀷棰勬帰娴嬪畬鎴?)
+        print("✅ 模型预探测完成")
     except Exception as e:
-        print(f"鈿狅笍 妯″瀷棰勬帰娴嬪け璐ワ紙涓嶅奖鍝嶆湇鍔★級: {e}")
+        print(f"⚠️ 模型预探测失败（不影响服务）: {e}")
 
-    # 鍚庡彴娓呯悊杩囨湡浼氳瘽锛堥伩鍏嶉鎺э級
-    print("[鍚姩] 鍚庡彴娓呯悊杩囨湡浼氳瘽...")
+    # 后台清理过期会话（避免风控）
+    print("[启动] 后台清理过期会话...")
     import threading
     threading.Thread(target=_cleanup_old_sessions, daemon=True).start()
 
 
 def _cleanup_old_sessions():
-    """鍚庡彴娓呯悊杩囨湡浼氳瘽锛屾瘡涓垹闄ら棿闅?10 绉掋€?""
+    """后台清理过期会话，每个删除间隔 10 秒。"""
     import time, asyncio
     async def _run():
         try:
@@ -85,40 +86,48 @@ def _cleanup_old_sessions():
     asyncio.run(_run())
 
 
-# 娉ㄥ唽璺敱
+# 注册路由
 app.include_router(router)
 app.include_router(anthropic_router)
 
-# 鍒濆鍖?Anthropic batch 瀛樺偍
+# 初始化 Anthropic batch 存储
 import os
 _anthropic_batch_dir = os.path.join(os.path.dirname(__file__), ".anthropic_batches")
 init_anthropic_batches(_anthropic_batch_dir)
 
-# 闈欐€佹枃浠剁洰褰?web_dir = Path(__file__).parent / "web"
+# 静态文件目录
+web_dir = Path(__file__).parent / "web"
 
-# 绠＄悊椤甸潰鐢?routes.py 涓殑 router 澶勭悊锛? 鍜?/admin锛?
+# 管理页面由 routes.py 中的 router 处理（/ 和 /admin）
+
 
 def main():
-    """涓诲嚱鏁?""
-    # 鑾峰彇绔彛閰嶇疆
+    """主函数"""
+    # 获取端口配置
     port = int(os.getenv("PORT", "8080"))
     host = os.getenv("HOST", "0.0.0.0")
 
     print(f"""
-鈺斺晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晽
-鈺?                   Mimo2API Python                       鈺?鈺?         灏嗗皬绫?Mimo AI 杞崲涓?OpenAI 鍏煎 API           鈺?鈺氣晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨暆
+╔══════════════════════════════════════════════════════════╗
+║                    Mimo2API Python                       ║
+║          将小米 Mimo AI 转换为 OpenAI 兼容 API           ║
+╚══════════════════════════════════════════════════════════╝
 
-馃殌 鏈嶅姟鍣ㄥ惎鍔ㄤ腑...
-馃搷 鍦板潃: http://{host}:{port}
-馃搳 绠＄悊鐣岄潰: http://{host}:{port}
-馃摗 API绔偣: http://{host}:{port}/v1/chat/completions
-馃摉 API鏂囨。: http://{host}:{port}/docs
+🚀 服务器启动中...
+📍 地址: http://{host}:{port}
+📊 管理界面: http://{host}:{port}
+📡 API端点: http://{host}:{port}/v1/chat/completions
+📖 API文档: http://{host}:{port}/docs
 
-閰嶇疆淇℃伅:
-  - API Keys: {len(config_manager.config.api_keys.split(','))} 涓?  - Mimo璐﹀彿: {len(config_manager.config.mimo_accounts)} 涓?
-鎸?Ctrl+C 鍋滄鏈嶅姟鍣?""")
+配置信息:
+  - API Keys: {len(config_manager.config.api_keys.split(','))} 个
+  - Mimo账号: {len(config_manager.config.mimo_accounts)} 个
 
-    # 鍚姩鏈嶅姟鍣?    uvicorn.run(
+按 Ctrl+C 停止服务器
+""")
+
+    # 启动服务器
+    uvicorn.run(
         app,
         host=host,
         port=port,
