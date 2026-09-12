@@ -1,6 +1,7 @@
 """Mimo API客户端"""
 
 import json
+import os
 import uuid
 import httpx
 import asyncio
@@ -26,7 +27,7 @@ class MimoClient:
     """Mimo API客户端"""
 
     API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
-    TIMEOUT = 120.0
+    TIMEOUT = float(os.getenv("MIMO_CLIENT_TIMEOUT", "600"))
 
     # MiMo API 原生 SSE 事件前缀（始终在 SSE #2 输出，独立于我们的工具定义）
     _MIMO_SSE_PREFIXES = {'webSearch', 'getTime', 'getTimeInfo', 'sessionSearch',
@@ -55,19 +56,22 @@ class MimoClient:
             "xiaomichatbot_ph": self.account.xiaomichatbot_ph,
         }
 
-    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> dict:
-        """创建请求体"""
+    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None) -> dict:
+        """创建请求体。temperature/topP 仅在显式传入时带上，不猜默认值。"""
+        model_config = {
+            "enableThinking": thinking,
+            "webSearchStatus": "disabled",
+            "model": model,
+        }
+        if temperature is not None:
+            model_config["temperature"] = temperature
+        if top_p is not None:
+            model_config["topP"] = top_p
         return {
             "msgId": uuid.uuid4().hex[:32],
             "conversationId": conversation_id or uuid.uuid4().hex[:32],
             "query": query,
-            "modelConfig": {
-                "enableThinking": thinking,
-                "temperature": 0.8,
-                "topP": 0.95,
-                "webSearchStatus": "disabled",
-                "model": model
-            },
+            "modelConfig": model_config,
             "multiMedias": multi_medias or [],
             "attachments": attachments or []
         }
