@@ -509,7 +509,9 @@ async def chat_completions(
     # 构建查询
     passthrough_mode = request.passthrough or config_manager.config.tools_passthrough
 
-    thinking = bool(request.reasoning_effort)
+    # 思考强度纯透传：客户端传了才开启并写入 modelConfig
+    reasoning_effort = (request.reasoning_effort or "").strip().lower() or None
+    thinking = bool(reasoning_effort)
     client = MimoClient(account)
 
     # 会话管理：通过消息指纹续接 MiMo conversationId
@@ -570,7 +572,8 @@ async def chat_completions(
                              raw_messages=request.messages if needs_compression else None,
                              raw_tools=tools_dict if needs_compression else None,
                              raw_passthrough=passthrough_mode if needs_compression else None,
-                             effective_model=effective_model),
+                             effective_model=effective_model,
+                             reasoning_effort=reasoning_effort),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -594,7 +597,8 @@ async def chat_completions(
                 print(f"[QueryGuard] Warmup chunk failed: {e}")
     try:
         content, think_content, usage, citations = await client.call_api(
-            query, thinking, effective_model, multi_medias, conversation_id=conv_id)
+            query, thinking, effective_model, multi_medias, conversation_id=conv_id,
+            reasoning_effort=reasoning_effort)
 
         # 保存用量
         if usage:
@@ -660,6 +664,7 @@ async def _stream_response(
     raw_tools: list = None,
     raw_passthrough: bool = False,
     effective_model: str = None,
+    reasoning_effort: str | None = None,
 ):
     """流式响应生成器。
 
@@ -721,7 +726,10 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(
+                query, thinking, model, multi_medias,
+                conversation_id=conv_id, reasoning_effort=reasoning_effort,
+            ):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -826,7 +834,10 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(
+                query, thinking, model, multi_medias,
+                conversation_id=conv_id, reasoning_effort=reasoning_effort,
+            ):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
