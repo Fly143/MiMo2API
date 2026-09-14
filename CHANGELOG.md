@@ -2,10 +2,17 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
-## [v2.6.7] — 2026-09-12
+## [v2.6.6.2] — 2026-09-14
 
 ### 变更
 - **主对话 HTTP 超时默认不限** — `MIMO_CLIENT_TIMEOUT` 默认 `0`（`timeout=None`）；思考+输出整条流纯透传，不再被 600s 掐断。需要保护时显式设秒数
+- **模型发现改读 `modelConfigListNg`** — 不再读旧 `modelConfigList`，也不再硬编码 TTS/ASR EXTRA 列表
+- **只显示最新版本系列** — chat / tts / asr **各自**取最高版本（chat 可升 v3 时只列 v3；TTS 若仍停 v2.5 则仍列 v2.5）
+- **`/v1/models` 按类型拆分** — `owned_by` 为 `chat` / `tts` / `asr`
+- 发现失败：保留上次缓存；无本地硬编码兜底
+
+### 文档
+- README 模型发现章节与上述逻辑同步
 
 ## [v2.6.6] — 2026-09-12
 
