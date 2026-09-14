@@ -16,7 +16,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 DEFAULT_API_KEYS = "sk-mimo"
 DEFAULT_ADMIN_PASSWORD = "admin"
-DEFAULT_TOOLS_PASSTHROUGH = False
+DEFAULT_TOOLS_PASSTHROUGH = True
 DEFAULT_COMPRESSION_MODE = "compress"
 
 ENC_PREFIX = "enc:v1:"
