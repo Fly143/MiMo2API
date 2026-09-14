@@ -79,17 +79,14 @@ def validate_api_key(authorization: Optional[str]) -> bool:
     return config_manager.validate_api_key(key)
 
 
-EXTRA_MODELS = ["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone", "mimo-v2.5-asr"]
-
+# ─── 动态模型发现 ─────────────────────────────────────────────
+# 读 bot/config 的 modelConfigListNg（新一代全量目录，含 TTS/ASR），
+# 不再读旧 modelConfigList，也不再硬编码 EXTRA_MODELS。
 
 def _append_extra_models(models: list) -> list:
-    for tts in EXTRA_MODELS:
-        if tts not in models:
-            models.append(tts)
+    """兼容旧调用：自定义列表原样返回（不再追加 EXTRA）。"""
     return models
 
-
-# ─── 动态模型发现 ─────────────────────────────────────────────
 
 async def _do_discover() -> list:
     global _models_cache
@@ -98,18 +95,25 @@ async def _do_discover() -> list:
             r = await client.get(MODELS_CONFIG_URL, headers={"User-Agent": "Mozilla/5.0"})
             if r.status_code != 200:
                 print(f"[模型发现] config端点返回 {r.status_code}")
-                return []
+                async with _models_lock:
+                    return list(_models_cache or [])
             data = r.json()
-            model_list = data.get("data", {}).get("modelConfigList", [])
-            models = [m["model"] for m in model_list if "model" in m]
-
-            # 追加 TTS 模型（MiMo API 的 modelConfigList 不包含它们）
-            for tts in EXTRA_MODELS:
-                if tts not in models:
-                    models.append(tts)
+            model_list = data.get("data", {}).get("modelConfigListNg") or []
+            models = []
+            seen = set()
+            for m in model_list:
+                name = (m or {}).get("model")
+                if name and name not in seen:
+                    seen.add(name)
+                    models.append(name)
+            if not models:
+                print("[模型发现] modelConfigListNg 为空")
+                async with _models_lock:
+                    return list(_models_cache or [])
     except Exception as e:
         print(f"[模型发现] 请求失败: {e}")
-        return []
+        async with _models_lock:
+            return list(_models_cache or [])
 
     async with _models_lock:
         _models_cache = models
