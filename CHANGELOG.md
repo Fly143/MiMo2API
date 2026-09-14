@@ -1,6 +1,13 @@
-﻿# 更新日志（Changelog）
+# 更新日志（Changelog）
 
 本文件记录 MiMo2API 的所有重要变更。
+
+## [v2.6.6.4] — 2026-09-14
+
+### 修复
+- **`tools_passthrough` 默认改为 `true`** — 默认不再注入完整 MiMoML「TOOL CALL FORMAT」说明书
+- **透传模式提示精简** — 仅嵌入 `<tools>…</tools>` JSON，不再提及 MiMoML，避免模型复述格式说明
+- aistudio 上游无原生 tool_calls，工具仍需写入 query；关掉透传才会用完整 MiMoML 说明书
 
 ## [v2.6.6.3] — 2026-09-14
 
