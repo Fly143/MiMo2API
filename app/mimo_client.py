@@ -60,7 +60,7 @@ class MimoClient:
         }
 
     def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None, reasoning_effort: str = None) -> dict:
-        """创建请求体。temperature/topP/reasoning_effort 仅在显式传入时带上，不猜默认值。"""
+        """创建请求体。temperature/topP/reasoning_effort 仅在显式传入时带上；仅 thinking 且无档位时默认 high。"""
         model_config = {
             "enableThinking": thinking,
             "webSearchStatus": "disabled",
@@ -72,6 +72,8 @@ class MimoClient:
             model_config["topP"] = top_p
         if reasoning_effort:
             model_config["reasoning_effort"] = reasoning_effort
+        elif thinking:
+            model_config["reasoning_effort"] = "high"
         return {
             "msgId": uuid.uuid4().hex[:32],
             "conversationId": conversation_id or uuid.uuid4().hex[:32],
