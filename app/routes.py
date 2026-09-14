@@ -136,7 +136,9 @@ async def _do_discover() -> list:
             if r.status_code != 200:
                 print(f"[模型发现] config端点返回 {r.status_code}")
                 async with _models_lock:
-                    return list(_models_cache or [])
+                    _models_cache = []
+                    _MODELS_META = {}
+                return []
             data = r.json()
             model_list = data.get("data", {}).get("modelConfigListNg") or []
             raw = []
@@ -149,11 +151,15 @@ async def _do_discover() -> list:
             if not raw:
                 print("[模型发现] modelConfigListNg 为空")
                 async with _models_lock:
-                    return list(_models_cache or [])
+                    _models_cache = []
+                    _MODELS_META = {}
+                return []
     except Exception as e:
         print(f"[模型发现] 请求失败: {e}")
         async with _models_lock:
-            return list(_models_cache or [])
+            _models_cache = []
+            _MODELS_META = {}
+        return []
 
     models = _latest_series(raw)
     meta = {n: {"owned_by": _model_kind(n), "kind": _model_kind(n)} for n in models}

@@ -1,4 +1,4 @@
-# 更新日志（Changelog）
+﻿# 更新日志（Changelog）
 
 本文件记录 MiMo2API 的所有重要变更。
 
@@ -9,7 +9,7 @@
 - **模型发现改读 `modelConfigListNg`** — 不再读旧 `modelConfigList`，也不再硬编码 TTS/ASR EXTRA 列表
 - **只显示最新版本系列** — chat / tts / asr **各自**取最高版本（chat 可升 v3 时只列 v3；TTS 若仍停 v2.5 则仍列 v2.5）
 - **`/v1/models` 按类型拆分** — `owned_by` 为 `chat` / `tts` / `asr`
-- 发现失败：保留上次缓存；无本地硬编码兜底
+- 发现失败：清空缓存并返回空列表；无上次缓存兜底、无本地硬编码兜底
 
 ### 文档
 - README 模型发现章节与上述逻辑同步
@@ -249,3 +249,4 @@
 | `no-tools` | 纯对话代理 + TTS（语音合成、音色设计、语音克隆、导演模式） |
 
 日常使用推荐 no-tools 分支（上下文更干净，输出质量更高）。如需 TTS 功能直接使用 no-tools。
+

@@ -1,4 +1,4 @@
-# MiMo2API
+﻿# MiMo2API
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -1095,3 +1095,4 @@ MIT License
 - 小米 MiMo AI Studio 提供的基础 API 服务。
 - [GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi) — 会话管理（消息指纹续接 MiMo conversationId）设计参考。
 - [CJackHwang/ds2api](https://github.com/CJackHwang/ds2api) — DSML 工具调用格式与流式筛分引擎设计参考。
+
