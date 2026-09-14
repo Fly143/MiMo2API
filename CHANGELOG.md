@@ -2,6 +2,12 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.6.3] — 2026-09-14
+
+### 变更
+- **easoning_effort\ 纯透传** — 客户端传 \low\/\medium\/\high\ 写入 \modelConfig.reasoning_effort\，不猜默认值
+- 仅 \	hinking=true\ 且无档位时默认 \high\（与 xiaomi / WorkBuddy 策略对齐）
+
 ## [v2.6.6.2] — 2026-09-14
 
 ### 变更
