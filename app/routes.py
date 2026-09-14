@@ -80,16 +80,56 @@ def validate_api_key(authorization: Optional[str]) -> bool:
 
 
 # ─── 动态模型发现 ─────────────────────────────────────────────
-# 读 bot/config 的 modelConfigListNg（新一代全量目录，含 TTS/ASR），
-# 不再读旧 modelConfigList，也不再硬编码 EXTRA_MODELS。
+# 读 bot/config 的 modelConfigListNg；按 chat / tts / asr 各自取「最新版本系列」。
+# 例：chat 升到 v3 后只列 v3；TTS 若仍停在 v2.5 则仍列 v2.5。
+
+_MODELS_META: dict = {}  # model -> {"owned_by": "chat"|"tts"|"asr", "kind": ...}
+
 
 def _append_extra_models(models: list) -> list:
     """兼容旧调用：自定义列表原样返回（不再追加 EXTRA）。"""
     return models
 
 
+def _model_kind(name: str) -> str:
+    n = (name or "").lower()
+    if "asr" in n:
+        return "asr"
+    if any(t in n for t in ("tts", "voiceclone", "voicedesign")):
+        return "tts"
+    return "chat"
+
+
+def _parse_model_version(name: str):
+    """mimo-v2.5-pro → (2, 5)；无版本号（如 clawm-alpha）→ None。"""
+    m = re.search(r"v(\d+)(?:\.(\d+))?", (name or "").lower())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
+
+
+def _latest_series(names: list) -> list:
+    """chat / tts / asr 各自只保留最高版本系列，保持 chat 在前。"""
+    groups = {"chat": [], "tts": [], "asr": []}
+    for n in names:
+        groups[_model_kind(n)].append(n)
+
+    out = []
+    for kind in ("chat", "tts", "asr"):
+        group = groups[kind]
+        ver_map = [(n, _parse_model_version(n)) for n in group]
+        versioned = [(n, v) for n, v in ver_map if v]
+        if not versioned:
+            continue
+        latest = max(v for _, v in versioned)
+        for n, v in versioned:
+            if v == latest:
+                out.append(n)
+    return out
+
+
 async def _do_discover() -> list:
-    global _models_cache
+    global _models_cache, _MODELS_META
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(MODELS_CONFIG_URL, headers={"User-Agent": "Mozilla/5.0"})
@@ -99,14 +139,14 @@ async def _do_discover() -> list:
                     return list(_models_cache or [])
             data = r.json()
             model_list = data.get("data", {}).get("modelConfigListNg") or []
-            models = []
+            raw = []
             seen = set()
             for m in model_list:
                 name = (m or {}).get("model")
                 if name and name not in seen:
                     seen.add(name)
-                    models.append(name)
-            if not models:
+                    raw.append(name)
+            if not raw:
                 print("[模型发现] modelConfigListNg 为空")
                 async with _models_lock:
                     return list(_models_cache or [])
@@ -115,10 +155,32 @@ async def _do_discover() -> list:
         async with _models_lock:
             return list(_models_cache or [])
 
+    models = _latest_series(raw)
+    meta = {n: {"owned_by": _model_kind(n), "kind": _model_kind(n)} for n in models}
     async with _models_lock:
         _models_cache = models
-    print(f"[模型发现] 找到 {len(models)} 个可用模型: {models}")
+        _MODELS_META = meta
+    print(f"[模型发现] 最新系列 {len(models)} 个: {models}")
     return models
+
+
+def _model_entry(model_id: str) -> dict:
+    ctx = _model_context(model_id)
+    meta = _MODELS_META.get(model_id) or {}
+    obj = {
+        "id": model_id,
+        "object": "model",
+        "created": 1681940951,
+        "owned_by": meta.get("owned_by") or "xiaomi",
+    }
+    if ctx:
+        obj.update({
+            "context_length": ctx["context_length"],
+            "context_window": ctx["context_length"],
+            "max_input_tokens": ctx["context_length"],
+            "max_output_tokens": ctx["max_output_tokens"],
+        })
+    return obj
 
 
 async def discover_models() -> list:
@@ -152,19 +214,7 @@ async def list_models(
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     asyncio.create_task(_background_refresh())
     models = get_models_list()
-    ctx_items = [(m, _model_context(m)) for m in models]
-    data = []
-    for m, ctx in ctx_items:
-        obj = {"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"}
-        if ctx:
-            obj.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        data.append(obj)
-    return {"object": "list", "data": data}
+    return {"object": "list", "data": [_model_entry(m) for m in models]}
 
 
 @router.post("/v1/models/refresh")
@@ -176,19 +226,7 @@ async def refresh_models(
     if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = await discover_models()
-    ctx_items = [(m, _model_context(m)) for m in models]
-    data = []
-    for m, ctx in ctx_items:
-        obj = {"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"}
-        if ctx:
-            obj.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        data.append(obj)
-    return {"object": "list", "data": data}
+    return {"object": "list", "data": [_model_entry(m) for m in models]}
 
 
 @router.get("/v1/models/{model_id}")
@@ -202,18 +240,7 @@ async def get_model(
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = get_models_list()
     if model_id in models:
-        ctx = _model_context(model_id)
-        base = {
-            "id": model_id, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
-        }
-        if ctx:
-            base.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        return base
+        return _model_entry(model_id)
     raise HTTPException(status_code=404, detail={"error": {"message": f"Model {model_id} not found"}})
 
 
