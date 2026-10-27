@@ -64,17 +64,10 @@ def build_tool_prompt(tools: List[Dict[str, Any]], passthrough: bool = False) ->
         return ""
 
     if passthrough:
-        # 透传模式：跳过冗长的 MiMoML 格式说明书，直接嵌入原始工具定义
-        # 用更简洁的指令让模型自己决定用什么格式输出工具调用
-        import json
+        # 透传：不塞 MiMoML 说明书（避免模型复述格式）。
+        # aistudio 上游无原生 OpenAI tool_calls，仅嵌入工具 JSON 供文本协议使用。
         tools_json = json.dumps(tools, indent=2, ensure_ascii=False)
-        return (
-            "You have the following tools available. "
-            "Use your native tool-calling format when you need to invoke one.\n\n"
-            f"<tools>\n{tools_json}\n</tools>\n\n"
-            "When you use a tool, use whatever tool call format you normally use "
-            "(TOOL_CALL:, <|MiMoML|tool_calls>, or the standard format you prefer)."
-        )
+        return f"<tools>\n{tools_json}\n</tools>"
 
 
     prompt = """TOOL CALL FORMAT — FOLLOW EXACTLY:

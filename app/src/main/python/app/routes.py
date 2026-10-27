@@ -79,42 +79,114 @@ def validate_api_key(authorization: Optional[str]) -> bool:
     return config_manager.validate_api_key(key)
 
 
-EXTRA_MODELS = ["mimo-v2.5-tts", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone", "mimo-v2.5-asr"]
+# ─── 动态模型发现 ─────────────────────────────────────────────
+# 读 bot/config 的 modelConfigListNg；按 chat / tts / asr 各自取「最新版本系列」。
+# 例：chat 升到 v3 后只列 v3；TTS 若仍停在 v2.5 则仍列 v2.5。
+
+_MODELS_META: dict = {}  # model -> {"owned_by": "chat"|"tts"|"asr", "kind": ...}
 
 
 def _append_extra_models(models: list) -> list:
-    for tts in EXTRA_MODELS:
-        if tts not in models:
-            models.append(tts)
+    """兼容旧调用：自定义列表原样返回（不再追加 EXTRA）。"""
     return models
 
 
-# ─── 动态模型发现 ─────────────────────────────────────────────
+def _model_kind(name: str) -> str:
+    n = (name or "").lower()
+    if "asr" in n:
+        return "asr"
+    if any(t in n for t in ("tts", "voiceclone", "voicedesign")):
+        return "tts"
+    return "chat"
+
+
+def _parse_model_version(name: str):
+    """mimo-v2.5-pro → (2, 5)；无版本号（如 clawm-alpha）→ None。"""
+    m = re.search(r"v(\d+)(?:\.(\d+))?", (name or "").lower())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
+
+
+def _latest_series(names: list) -> list:
+    """chat / tts / asr 各自只保留最高版本系列，保持 chat 在前。"""
+    groups = {"chat": [], "tts": [], "asr": []}
+    for n in names:
+        groups[_model_kind(n)].append(n)
+
+    out = []
+    for kind in ("chat", "tts", "asr"):
+        group = groups[kind]
+        ver_map = [(n, _parse_model_version(n)) for n in group]
+        versioned = [(n, v) for n, v in ver_map if v]
+        if not versioned:
+            continue
+        latest = max(v for _, v in versioned)
+        for n, v in versioned:
+            if v == latest:
+                out.append(n)
+    return out
+
 
 async def _do_discover() -> list:
-    global _models_cache
+    global _models_cache, _MODELS_META
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(MODELS_CONFIG_URL, headers={"User-Agent": "Mozilla/5.0"})
             if r.status_code != 200:
                 print(f"[模型发现] config端点返回 {r.status_code}")
+                async with _models_lock:
+                    _models_cache = []
+                    _MODELS_META = {}
                 return []
             data = r.json()
-            model_list = data.get("data", {}).get("modelConfigList", [])
-            models = [m["model"] for m in model_list if "model" in m]
-
-            # 追加 TTS 模型（MiMo API 的 modelConfigList 不包含它们）
-            for tts in EXTRA_MODELS:
-                if tts not in models:
-                    models.append(tts)
+            model_list = data.get("data", {}).get("modelConfigListNg") or []
+            raw = []
+            seen = set()
+            for m in model_list:
+                name = (m or {}).get("model")
+                if name and name not in seen:
+                    seen.add(name)
+                    raw.append(name)
+            if not raw:
+                print("[模型发现] modelConfigListNg 为空")
+                async with _models_lock:
+                    _models_cache = []
+                    _MODELS_META = {}
+                return []
     except Exception as e:
         print(f"[模型发现] 请求失败: {e}")
+        async with _models_lock:
+            _models_cache = []
+            _MODELS_META = {}
         return []
 
+    models = _latest_series(raw)
+    meta = {n: {"owned_by": _model_kind(n), "kind": _model_kind(n)} for n in models}
     async with _models_lock:
         _models_cache = models
-    print(f"[模型发现] 找到 {len(models)} 个可用模型: {models}")
+        _MODELS_META = meta
+    print(f"[模型发现] 最新系列 {len(models)} 个: {models}")
     return models
+
+
+def _model_entry(model_id: str) -> dict:
+    ctx = _model_context(model_id)
+    meta = _MODELS_META.get(model_id) or {}
+    obj = {
+        "id": model_id,
+        "object": "model",
+        "created": 1681940951,
+        "owned_by": meta.get("owned_by") or "xiaomi",
+    }
+    if ctx:
+        obj.update({
+            "context_length": ctx["context_length"],
+            "context_window": ctx["context_length"],
+            "max_input_tokens": ctx["context_length"],
+            "max_output_tokens": ctx["max_output_tokens"],
+        })
+    return obj
 
 
 async def discover_models() -> list:
@@ -148,19 +220,7 @@ async def list_models(
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     asyncio.create_task(_background_refresh())
     models = get_models_list()
-    ctx_items = [(m, _model_context(m)) for m in models]
-    data = []
-    for m, ctx in ctx_items:
-        obj = {"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"}
-        if ctx:
-            obj.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        data.append(obj)
-    return {"object": "list", "data": data}
+    return {"object": "list", "data": [_model_entry(m) for m in models]}
 
 
 @router.post("/v1/models/refresh")
@@ -172,19 +232,7 @@ async def refresh_models(
     if not validate_api_key(api_key):
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = await discover_models()
-    ctx_items = [(m, _model_context(m)) for m in models]
-    data = []
-    for m, ctx in ctx_items:
-        obj = {"id": m, "object": "model", "created": 1681940951, "owned_by": "xiaomi"}
-        if ctx:
-            obj.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        data.append(obj)
-    return {"object": "list", "data": data}
+    return {"object": "list", "data": [_model_entry(m) for m in models]}
 
 
 @router.get("/v1/models/{model_id}")
@@ -198,18 +246,7 @@ async def get_model(
         raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
     models = get_models_list()
     if model_id in models:
-        ctx = _model_context(model_id)
-        base = {
-            "id": model_id, "object": "model", "created": 1681940951, "owned_by": "xiaomi",
-        }
-        if ctx:
-            base.update({
-                "context_length": ctx["context_length"],
-                "context_window": ctx["context_length"],
-                "max_input_tokens": ctx["context_length"],
-                "max_output_tokens": ctx["max_output_tokens"],
-            })
-        return base
+        return _model_entry(model_id)
     raise HTTPException(status_code=404, detail={"error": {"message": f"Model {model_id} not found"}})
 
 
@@ -472,7 +509,9 @@ async def chat_completions(
     # 构建查询
     passthrough_mode = request.passthrough or config_manager.config.tools_passthrough
 
-    thinking = bool(request.reasoning_effort)
+    # 思考强度纯透传：客户端传了才开启并写入 modelConfig
+    reasoning_effort = (request.reasoning_effort or "").strip().lower() or None
+    thinking = bool(reasoning_effort)
     client = MimoClient(account)
 
     # 会话管理：通过消息指纹续接 MiMo conversationId
@@ -533,7 +572,8 @@ async def chat_completions(
                              raw_messages=request.messages if needs_compression else None,
                              raw_tools=tools_dict if needs_compression else None,
                              raw_passthrough=passthrough_mode if needs_compression else None,
-                             effective_model=effective_model),
+                             effective_model=effective_model,
+                             reasoning_effort=reasoning_effort),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -557,7 +597,8 @@ async def chat_completions(
                 print(f"[QueryGuard] Warmup chunk failed: {e}")
     try:
         content, think_content, usage, citations = await client.call_api(
-            query, thinking, effective_model, multi_medias, conversation_id=conv_id)
+            query, thinking, effective_model, multi_medias, conversation_id=conv_id,
+            reasoning_effort=reasoning_effort)
 
         # 保存用量
         if usage:
@@ -623,6 +664,7 @@ async def _stream_response(
     raw_tools: list = None,
     raw_passthrough: bool = False,
     effective_model: str = None,
+    reasoning_effort: str | None = None,
 ):
     """流式响应生成器。
 
@@ -684,7 +726,10 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(
+                query, thinking, model, multi_medias,
+                conversation_id=conv_id, reasoning_effort=reasoning_effort,
+            ):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -789,7 +834,10 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(
+                query, thinking, model, multi_medias,
+                conversation_id=conv_id, reasoning_effort=reasoning_effort,
+            ):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue

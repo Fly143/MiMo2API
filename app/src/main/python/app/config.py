@@ -23,10 +23,9 @@ except ImportError:  # pragma: no cover - Chaquopy / 无原生依赖环境
     HAS_FERNET = False
     print("[Config] cryptography 不可用，敏感字段将以明文写入 config.json")
 
-
 DEFAULT_API_KEYS = "sk-mimo"
 DEFAULT_ADMIN_PASSWORD = "admin"
-DEFAULT_TOOLS_PASSTHROUGH = False
+DEFAULT_TOOLS_PASSTHROUGH = True
 DEFAULT_COMPRESSION_MODE = "compress"
 
 ENC_PREFIX = "enc:v1:"
@@ -38,7 +37,7 @@ class SecretBox:
 
     def __init__(self, config_path: Path):
         self.key_path = config_path.parent / ".secret_key"
-        self._fernet = None
+        self._fernet: Optional[Fernet] = None
         self._lock = threading.RLock()
 
     def _load_or_create(self):
@@ -56,7 +55,7 @@ class SecretBox:
             try:
                 os.chmod(self.key_path, 0o600)
             except OSError:
-                pass
+                pass  # Windows
             self._fernet = Fernet(key)
             return self._fernet
 
@@ -64,7 +63,7 @@ class SecretBox:
         if plaintext is None or plaintext == "":
             return ""
         if isinstance(plaintext, str) and plaintext.startswith(ENC_PREFIX):
-            return plaintext
+            return plaintext  # already encrypted
         box = self._load_or_create()
         if box is None:
             return plaintext
@@ -75,7 +74,7 @@ class SecretBox:
         if value is None or value == "":
             return ""
         if not isinstance(value, str) or not value.startswith(ENC_PREFIX):
-            return value
+            return value  # legacy plaintext
         box = self._load_or_create()
         if box is None:
             print("[Config] 无法解密 enc: 数据（缺少 cryptography）")
@@ -83,14 +82,14 @@ class SecretBox:
         blob = value[len(ENC_PREFIX):].encode("ascii")
         try:
             return box.decrypt(blob).decode("utf-8")
-        except Exception as e:
+        except (InvalidToken, Exception) as e:
             print(f"[Config] decrypt failed ({e}); check .secret_key")
             return ""
 
 
 @dataclass
 class MimoAccount:
-    """Mimo账号配置"""
+    """Mimo账号配置（内存中为明文）"""
     service_token: str
     user_id: str
     xiaomichatbot_ph: str
@@ -98,12 +97,17 @@ class MimoAccount:
     last_test: str = ""
     is_valid: bool = False
 
-    def to_dict(self):
+    def to_masked_dict(self) -> dict:
+        """API / UI 用：不回传完整 token。"""
         d = asdict(self)
-        d["token_masked"] = self.service_token[:16] + "..." + self.service_token[-6:] if len(self.service_token) > 22 else "***"
+        st = self.service_token or ""
+        d["token_masked"] = (st[:16] + "..." + st[-6:]) if len(st) > 22 else ("***" if st else "")
+        d.pop("service_token", None)
+        d.pop("xiaomichatbot_ph", None)
         return d
 
     def to_storage_dict(self, box: SecretBox) -> dict:
+        """落盘用：敏感字段加密。"""
         return {
             "service_token": box.encrypt(self.service_token),
             "user_id": box.encrypt(self.user_id),
@@ -116,7 +120,7 @@ class MimoAccount:
 
 @dataclass
 class Config:
-    """应用配置"""
+    """应用配置（内存明文）"""
     api_keys: str = DEFAULT_API_KEYS
     admin_password: str = DEFAULT_ADMIN_PASSWORD
     mimo_accounts: List[MimoAccount] = None
@@ -131,28 +135,25 @@ class Config:
             self.models = []
 
     def to_dict(self):
-        d = {
+        """管理 API 用：密码与 token 掩码。"""
+        return {
             "api_keys": self.api_keys,
             "admin_password": "***" if self.admin_password else "",
-            "mimo_accounts": [acc.to_dict() for acc in self.mimo_accounts],
+            "mimo_accounts": [acc.to_masked_dict() for acc in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
             "compression_mode": self.compression_mode,
+            "models": self.models,
         }
-        if self.models:
-            d["models"] = self.models
-        return d
 
-    def to_save_dict(self, box: SecretBox):
-        d = {
+    def to_save_dict(self, box: SecretBox) -> dict:
+        return {
             "api_keys": self.api_keys,
             "admin_password": box.encrypt(self.admin_password),
             "mimo_accounts": [acc.to_storage_dict(box) for acc in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
             "compression_mode": self.compression_mode,
+            "models": self.models,
         }
-        if self.models:
-            d["models"] = self.models
-        return d
 
 
 def _decrypt_account(raw: dict, box: SecretBox) -> MimoAccount:
@@ -195,6 +196,7 @@ class ConfigManager:
                 tools_passthrough=data.get("tools_passthrough", DEFAULT_TOOLS_PASSTHROUGH),
                 compression_mode=data.get("compression_mode", DEFAULT_COMPRESSION_MODE),
             )
+            # 明文 → 密文迁移
             if self._has_legacy_plaintext(data):
                 print("[Config] migrating plaintext secrets to encrypted storage")
                 self.save()

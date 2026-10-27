@@ -27,7 +27,10 @@ class MimoClient:
     """Mimo API客户端"""
 
     API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
-    TIMEOUT = float(os.getenv("MIMO_CLIENT_TIMEOUT", "600"))
+    # 主对话 HTTP 超时（秒）。默认 0 = 不限：思考+输出整条流纯透传，不设代理侧时限。
+    # 需要保护时显式设 MIMO_CLIENT_TIMEOUT=600 等。
+    _t = float(os.getenv("MIMO_CLIENT_TIMEOUT", "0") or "0")
+    TIMEOUT = None if _t <= 0 else _t
 
     # MiMo API 原生 SSE 事件前缀（始终在 SSE #2 输出，独立于我们的工具定义）
     _MIMO_SSE_PREFIXES = {'webSearch', 'getTime', 'getTimeInfo', 'sessionSearch',
@@ -56,8 +59,8 @@ class MimoClient:
             "xiaomichatbot_ph": self.account.xiaomichatbot_ph,
         }
 
-    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None) -> dict:
-        """创建请求体。temperature/topP 仅在显式传入时带上，不猜默认值。"""
+    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None, reasoning_effort: str = None) -> dict:
+        """创建请求体。temperature/topP/reasoning_effort 仅在显式传入时带上；仅 thinking 且无档位时默认 high。"""
         model_config = {
             "enableThinking": thinking,
             "webSearchStatus": "disabled",
@@ -67,6 +70,10 @@ class MimoClient:
             model_config["temperature"] = temperature
         if top_p is not None:
             model_config["topP"] = top_p
+        if reasoning_effort:
+            model_config["reasoning_effort"] = reasoning_effort
+        elif thinking:
+            model_config["reasoning_effort"] = "high"
         return {
             "msgId": uuid.uuid4().hex[:32],
             "conversationId": conversation_id or uuid.uuid4().hex[:32],
@@ -76,12 +83,12 @@ class MimoClient:
             "attachments": attachments or []
         }
 
-    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
+    async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, reasoning_effort: str = None) -> Tuple[str, str, dict]:
         """调用Mimo API（非流式），带重试"""
         last_error = None
         for attempt in range(MAX_RETRIES):
             try:
-                return await self._call_api_once(query, thinking, model, multi_medias, attachments, conversation_id)
+                return await self._call_api_once(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort)
             except MimoApiError as e:
                 last_error = e
                 if e.status_code in (401, 403, 404):
@@ -98,7 +105,7 @@ class MimoClient:
                     await asyncio.sleep(delay)
         raise last_error
 
-    async def _call_api_once(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> Tuple[str, str, dict]:
+    async def _call_api_once(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, reasoning_effort: str = None) -> Tuple[str, str, dict]:
         """
         调用Mimo API（非流式）单次执行
 
@@ -108,7 +115,7 @@ class MimoClient:
         Returns:
             (content, think_content, usage)
         """
-        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort)
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             response = await client.post(
@@ -155,14 +162,14 @@ class MimoClient:
 
             return content, think_content, usage, citations
 
-    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None) -> AsyncIterator[dict]:
+    async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, reasoning_effort: str = None) -> AsyncIterator[dict]:
         """
         调用Mimo API（流式）
 
         Yields:
             SSE数据字典（仅 type=text 且有 content 的，已过滤 MiMo 原生前缀）
         """
-        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort)
 
         chunk_count = 0
 
