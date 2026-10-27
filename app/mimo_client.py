@@ -15,6 +15,46 @@ RETRY_BASE_DELAY = 1.0
 RETRY_MAX_DELAY = 10.0
 
 
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+async def stream_chat(client, query, thinking, model, multi_medias=None,
+                      conversation_id=None, reasoning_effort=None):
+    """stream_api 的兼容层：把 v3 的 reasoning 增量折成 <think> 标签。
+
+    routes / anthropic_routes 各端点仍按标签解析思考块，这里只做协议形状转换，
+    正文、usage、citations 原样透传。
+    """
+    in_think = False
+    async for item in client.stream_api(
+        query, thinking, model, multi_medias,
+        conversation_id=conversation_id, reasoning_effort=reasoning_effort,
+    ):
+        kind = item.get("type")
+        if kind == "reasoning":
+            piece = item.get("content") or ""
+            if not piece:
+                continue
+            if not in_think:
+                in_think = True
+                piece = THINK_OPEN + piece
+            yield {"type": "text", "content": piece}
+            continue
+        if kind == "text":
+            piece = item.get("content") or ""
+            if not piece:
+                continue
+            if in_think:
+                in_think = False
+                piece = THINK_CLOSE + piece
+            yield {"type": "text", "content": piece}
+            continue
+        yield item
+    if in_think:
+        yield {"type": "text", "content": THINK_CLOSE}
+
+
 class MimoApiError(Exception):
     """MiMo API上游错误，携带HTTP状态码和响应体"""
     def __init__(self, status_code: int, response_body: str):
@@ -26,7 +66,10 @@ class MimoApiError(Exception):
 class MimoClient:
     """Mimo API客户端"""
 
-    API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
+    # v3 协议（2026-10 起唯一可用）。旧 /open-apis/bot/chat 固定回 event:error
+    # {"type":"text","content":"平台升级啦，请「刷新页面」畅享更好的体验！"}，不再产生任何回答。
+    API_URL = "https://aistudio.xiaomimimo.com/open-apis/react/chat"
+    LEGACY_API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
     # 主对话 HTTP 超时（秒）。默认 0 = 不限：思考+输出整条流纯透传，不设代理侧时限。
     # 需要保护时显式设 MIMO_CLIENT_TIMEOUT=600 等。
     _t = float(os.getenv("MIMO_CLIENT_TIMEOUT", "0") or "0")
@@ -129,49 +172,75 @@ class MimoClient:
             if response.status_code != 200:
                 raise MimoApiError(response.status_code, response.text)
 
-            result = []
+            content_parts = []
+            think_parts = []
             citations = []
             usage = {"promptTokens": 0, "completionTokens": 0}
 
-            # 解析SSE流
-            async for line in response.aiter_lines():
-                if line.startswith("data:"):
-                    data = line[5:].strip()
-                    try:
-                        sse_data = json.loads(data)
-                        if isinstance(sse_data, dict):
-                            if sse_data.get("type") == "text":
-                                content = sse_data.get("content", "")
-                                # 过滤 MiMo 原生前缀
-                                if content.strip() not in self._MIMO_SSE_PREFIXES:
-                                    result.append(content)
-                            if "promptTokens" in sse_data:
-                                usage = {
-                                    "promptTokens": sse_data.get("promptTokens", 0),
-                                    "completionTokens": sse_data.get("completionTokens", 0)
-                                }
-                        # list 类型跳过
-                        elif isinstance(sse_data, list):
-                            continue
-                    except json.JSONDecodeError:
-                        continue
+            async for event, payload in self._iter_events(response):
+                if event == "error":
+                    raise MimoApiError(502, json.dumps(payload, ensure_ascii=False))
+                if event == "message" and isinstance(payload, dict):
+                    think_parts.append(payload.get("reasoningContent") or "")
+                    content_parts.append(payload.get("content") or "")
+                elif event == "search" and isinstance(payload, list):
+                    citations = payload
+                elif isinstance(payload, dict) and "promptTokens" in payload:
+                    usage = {
+                        "promptTokens": payload.get("promptTokens", 0),
+                        "completionTokens": payload.get("completionTokens", 0),
+                        "totalTokens": payload.get("totalTokens", 0),
+                        "nativeUsage": payload.get("nativeUsage", {}),
+                    }
 
-            # 合并结果并解析think标签
-            full_text = "".join(result).replace("\x00", "")
-            content, think_content = self._parse_think_tags(full_text)
+            # v3 把思考与正文分成两个字段；老式 <think> 标签仅作兜底
+            full_content = "".join(content_parts).replace("\x00", "")
+            think_content = "".join(think_parts).replace("\x00", "")
+            if not think_content:
+                full_content, think_content = self._parse_think_tags(full_content)
 
-            return content, think_content, usage, citations
+            return full_content, think_content, usage, citations
+
+    @staticmethod
+    async def _iter_events(response):
+        """解析 v3 SSE：`id:` / `event:` / `data:` 三段式，按事件名逐个产出。
+
+        事件名：dialogId / message / usage / finish / search / error。
+        `data:[DONE]` 直接结束；解析失败的行丢弃。
+        """
+        event = None
+        async for line in response.aiter_lines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("event:"):
+                event = line[6:].strip()
+                continue
+            if not line.startswith("data:"):
+                continue
+            raw = line[5:].strip()
+            if not raw:
+                continue
+            if raw == "[DONE]":
+                return
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            yield (event or "message"), payload
+            event = None
 
     async def stream_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, reasoning_effort: str = None) -> AsyncIterator[dict]:
         """
-        调用Mimo API（流式）
+        调用Mimo API（流式，v3 协议）
 
         Yields:
-            SSE数据字典（仅 type=text 且有 content 的，已过滤 MiMo 原生前缀）
+            {"type":"text","content":...}      正文增量
+            {"type":"reasoning","content":...} 思考增量（上游 reasoningContent）
+            {"type":"usage", ...}              用量
+            {"type":"citations","data":[...]}  搜索结果（webSearch 开启时）
         """
         body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort)
-
-        chunk_count = 0
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             async with client.stream(
@@ -186,38 +255,23 @@ class MimoClient:
                     error_body = await response.aread()
                     raise MimoApiError(response.status_code, error_body.decode(errors="replace"))
 
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    chunk_count += 1
-                    try:
-                        sse_data = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-
-                    # 安全的类型分发
-                    if isinstance(sse_data, list):
-                        # list 事件 = 搜索结果（含 citation URL）
-                        yield {"type": "citations", "data": sse_data}
-                        continue
-                    if not isinstance(sse_data, dict):
-                        continue
-
-                    # 过滤 MiMo 原生 SSE 前缀事件（如 SSE #2 的 'webSearch'）
-                    if sse_data.get("type") == "text" and sse_data.get("content"):
-                        content_val = sse_data["content"].strip()
-                        if content_val in self._MIMO_SSE_PREFIXES:
-                            continue  # 跳过 MiMo 原生的工具名 SSE 事件
-
-                    # 只 yield text 类型和 usage 事件
-                    if sse_data.get("type") == "text" and sse_data.get("content"):
-                        yield sse_data
-                    elif "promptTokens" in sse_data:
-                        yield {"type": "usage", "promptTokens": sse_data.get("promptTokens", 0),
-                               "completionTokens": sse_data.get("completionTokens", 0),
-                               "totalTokens": sse_data.get("totalTokens", 0),
-                               "nativeUsage": sse_data.get("nativeUsage", {})}
+                async for event, payload in self._iter_events(response):
+                    if event == "error":
+                        raise MimoApiError(502, json.dumps(payload, ensure_ascii=False))
+                    if event == "message" and isinstance(payload, dict):
+                        reasoning = payload.get("reasoningContent")
+                        if reasoning:
+                            yield {"type": "reasoning", "content": reasoning}
+                        text = payload.get("content")
+                        if text:
+                            yield {"type": "text", "content": text}
+                    elif event == "search" and isinstance(payload, list):
+                        yield {"type": "citations", "data": payload}
+                    elif isinstance(payload, dict) and "promptTokens" in payload:
+                        yield {"type": "usage", "promptTokens": payload.get("promptTokens", 0),
+                               "completionTokens": payload.get("completionTokens", 0),
+                               "totalTokens": payload.get("totalTokens", 0),
+                               "nativeUsage": payload.get("nativeUsage", {})}
 
     @staticmethod
     def _parse_think_tags(text: str) -> Tuple[str, str]:

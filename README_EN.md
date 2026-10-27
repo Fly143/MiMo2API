@@ -90,7 +90,7 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
                 ▼
 ┌──────────────────────────────────────────────────────────┐
 │              MiMo API (aistudio.xiaomimimo.com)           │
-│              /open-apis/bot/chat (SSE)                    │
+│              /open-apis/react/chat (SSE, v3)                 │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -452,7 +452,7 @@ Tools like Claude Code CLI expect Anthropic-style model names and cannot directl
 | `claude-3-sonnet` | `mimo-v2.5` |
 | `claude-3-haiku` | `mimo-v2.5` |
 
-> ⚠️ **Important:** It is recommended to use **2.5 series models**. MiMo web version only provides 2.5 series; using other legacy models may result in account suspension.
+> ⚠️ **Important:** The web version currently serves the **V2.6 series** (`mimo-v2.6-pro`, `mimo-v2.6-flash`; TTS/ASR remain on v2.5). The V2.5 chat models were retired upstream on 2026-10-21 and no longer return output. Let `/v1/models` discover the list; do not hardcode model IDs.
 
 Also supports search/nothinking variants. MiMo native names (`mimo-*`) continue to work directly; `/v1/models` output is unchanged, not affecting other software.
 

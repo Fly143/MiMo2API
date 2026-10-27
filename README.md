@@ -91,7 +91,7 @@
                 ▼
 ┌──────────────────────────────────────────────────────────┐
 │              MiMo API (aistudio.xiaomimimo.com)           │
-│              /open-apis/bot/chat (SSE)                    │
+│              /open-apis/react/chat (SSE, v3)                 │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -506,7 +506,7 @@ Claude Code CLI 等工具期望 Anthropic 风格的模型名，无法直接使�
 | `claude-3-sonnet` | `mimo-v2.5` |
 | `claude-3-haiku` | `mimo-v2.5` |
 
-> ⚠️ **重要提醒：** 建议选择 **2.5 系列模型**（`mimo-v2.5-pro`、`mimo-v2.5`、`mimo-v2.5-tts`、`mimo-v2.5-asr` 等）。MiMo 网页版已只提供 2.5 系列，使用其他旧版模型可能导致账号被封禁。
+> ⚠️ **重要提醒：** 网页版当前提供 **V2.6 系列**（`mimo-v2.6-pro`、`mimo-v2.6-flash`，TTS/ASR 仍为 v2.5）。V2.5 对话模型已于 2026-10-21 上游下线，调用旧模型 ID 不再有输出。模型列表由 `/v1/models` 自动发现，不要写死。
 
 也支持 search/nothinking 变体。MiMo 原生名（`mimo-*`）继续直接使用，`/v1/models` 返回不变，不影响其他软件。
 

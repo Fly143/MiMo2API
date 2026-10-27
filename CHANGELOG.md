@@ -2,6 +2,27 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.7] — 2026-10-27
+
+### 修复
+- **迁移到 `react/chat`（v3）协议** — 上游 `/open-apis/bot/chat` 已废弃，任何请求都只回
+  `event:error` + `{"type":"text","content":"平台升级啦，请「刷新页面」畅享更好的体验！"}`，
+  表现为"问什么都回这一句"。主对话改走 `/open-apis/react/chat`
+- **v3 SSE 解析** — 新增 `_iter_events()`：`id:` / `event:` / `data:` 三段式，事件为
+  `dialogId` / `message`（`reasoningContent` + `content`）/ `usage` / `finish` / `search` / `error`
+- **思考与正文分离** — v3 把思考放独立的 `reasoningContent`；新增 `stream_chat()` 适配层折回
+  `<think>` 标签，Chat Completions / Anthropic Messages / Responses 三套流式端点复用同一份解析
+- **上游错误不再当正文** — `event:error` 直接抛 `MimoApiError`，不再把提示文本透传给客户端
+- **多轮上下文** — v3 仅凭 `conversationId` 续接，无需 `previousDialogueId`
+
+### 文档
+- README 架构图端点更正为 `react/chat (v3)`
+- 模型系列说明更新：网页版现为 V2.6 系列（`mimo-v2.6-pro` / `mimo-v2.6-flash`），V2.5 对话模型 2026-10-21 下线
+
+### 已知限制
+- 工具调用（MiMoML 文本协议）在 v2.6 模型上被模型自身拒绝（它认为只能调用内置 search/scrape）；
+  v3 请求体的 `tools`、`modelConfig.tools`、`modelConfig.systemPrompt` 上游均不支持。内置联网检索/爬取照常可用
+
 ## [v2.6.6.4] — 2026-09-14
 
 ### 修复
