@@ -183,8 +183,8 @@ class MimoClient:
                 if event == "message" and isinstance(payload, dict):
                     think_parts.append(payload.get("reasoningContent") or "")
                     content_parts.append(payload.get("content") or "")
-                elif event == "search" and isinstance(payload, list):
-                    citations = payload
+                elif event in ("search", "web_search"):
+                    citations = self._search_results(payload) or citations
                 elif isinstance(payload, dict) and "promptTokens" in payload:
                     usage = {
                         "promptTokens": payload.get("promptTokens", 0),
@@ -200,6 +200,28 @@ class MimoClient:
                 full_content, think_content = self._parse_think_tags(full_content)
 
             return full_content, think_content, usage, citations
+
+    @staticmethod
+    def _search_results(payload) -> list:
+        """从 web_search 事件里取检索结果列表（事件形状随上游而变，缺字段返回空）。
+
+        上游形状：{"toolCalls":[{name,arguments}], "responses":[{id,name,responseData:"<json str>"}]}
+        responseData 是 JSON 字符串，解析后为 [{url,title,summary,datePublished,...}]。
+        """
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+        for item in payload.get("responses") or []:
+            raw = item.get("responseData") if isinstance(item, dict) else None
+            if isinstance(raw, str) and raw.strip().startswith("["):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, list):
+                    return data
+        return []
 
     @staticmethod
     async def _iter_events(response):
@@ -265,8 +287,10 @@ class MimoClient:
                         text = payload.get("content")
                         if text:
                             yield {"type": "text", "content": text}
-                    elif event == "search" and isinstance(payload, list):
-                        yield {"type": "citations", "data": payload}
+                    elif event in ("search", "web_search"):
+                        results = self._search_results(payload)
+                        if results:
+                            yield {"type": "citations", "data": results}
                     elif isinstance(payload, dict) and "promptTokens" in payload:
                         yield {"type": "usage", "promptTokens": payload.get("promptTokens", 0),
                                "completionTokens": payload.get("completionTokens", 0),
