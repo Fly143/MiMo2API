@@ -35,6 +35,9 @@ class StreamSieve:
         "<｜MiMoML｜function_calls>",
         "<tool_calls>",
         "<function_calls>",
+        "<antml:invoke",
+        "<invoke ",
+        "<invoke\n",
     ]
 
     def __init__(
@@ -244,6 +247,11 @@ class StreamSieve:
                 return True
             if "<|MiMoML|tool_calls>" in buf and "</|MiMoML|tool_calls>" in buf:
                 return True
+            # antml:invoke（v2.6 上游内置工具）— 开闭标签数相等才算完整
+            if "<antml:invoke" in buf or "<invoke" in buf:
+                opens = buf.count("<invoke") + buf.count("<antml:invoke")
+                closes = buf.count("</invoke>") + buf.count("</antml:invoke>")
+                return opens == closes and opens > 0
             return False
 
         return False

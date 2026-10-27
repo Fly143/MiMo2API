@@ -38,6 +38,36 @@ from .response_store import (
     delete_response_record as _delete_response_record,
     update_response_record as _update_response_record,
 )
+from .tools import registry as tool_registry
+
+
+def format_tool_results(tool_results: list) -> str:
+    """将工具执行结果列表格式化为可读文本，返回给客户端。"""
+    if not tool_results:
+        return ""
+    lines = []
+    for item in tool_results:
+        name = item.get("name", "unknown")
+        res = item.get("result", {})
+        lines.append(f"[工具执行: {name}]")
+        if isinstance(res, dict) and "error" in res:
+            lines.append(f"  ❌ {res['error']}")
+        elif isinstance(res, dict) and "result" in res:
+            inner = res["result"]
+            if isinstance(inner, dict):
+                # 目录列表结果
+                if "files" in inner and "dirs" in inner:
+                    lines.append(f"  目录: {inner.get('path', '')}")
+                    lines.append(f"  文件({len(inner['files'])}): {', '.join(inner['files'][:20])}{'...' if len(inner['files']) > 20 else ''}")
+                    lines.append(f"  文件夹({len(inner['dirs'])}): {', '.join(inner['dirs'][:20])}{'...' if len(inner['dirs']) > 20 else ''}")
+                else:
+                    lines.append(f"  {json.dumps(inner, ensure_ascii=False)[:200]}")
+            else:
+                lines.append(f"  {str(inner)[:200]}")
+        else:
+            lines.append(f"  {str(res)[:200]}")
+        lines.append("")
+    return "\n".join(lines)
 
 router = APIRouter()
 
@@ -631,6 +661,31 @@ async def chat_completions(
         if not tool_calls:
             content = clean_tool_text(content)
         content = _strip_tool_name_prefix(content, tool_names)
+
+        # 服务端执行工具调用（非内置两个工具：search / scrape）
+        # 内置两个工具由上游原生执行；其他工具由本服务端执行并返回结果。
+        if tool_calls:
+            tool_results = []
+            for tc in tool_calls:
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = fn.get("name", "")
+                args = fn.get("arguments", "{}")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        args = {"input": args}
+                if tool_registry.has(name):
+                    res = tool_registry.execute(name, args)
+                    tool_results.append({"name": name, "result": res})
+                else:
+                    tool_results.append({"name": name, "result": {"error": f"未知工具: {name}"}})
+
+            # 格式化结果为文本，返回给客户端
+            content = format_tool_results(tool_results)
+
+            # 工具执行完成，不再返回 tool_calls
+            tool_calls = None
 
         if tool_calls:
             return _build_response(

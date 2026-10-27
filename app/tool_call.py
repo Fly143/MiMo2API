@@ -200,6 +200,11 @@ def extract_tool_call(
     if tc:
         return tc, clean_tool_text(text)
 
+    # 策略0.5: <antml:invoke> — MiMo v2.6 上游内置工具的输出格式
+    tc = _extract_antml_tool_call(text, tool_names)
+    if tc:
+        return tc, clean_tool_text(text)
+
     # 策略1: TOOL_CALL: name(args)
     tc = _extract_tool_call_pattern(text, tool_names)
     if tc:
@@ -230,7 +235,7 @@ def _has_tool_markers(text: str) -> bool:
     """检测文本是否包含工具调用标记（MiMoML、XML 等）。"""
     markers = [
         "TOOL_CALL:", "<tool_call", "<function_call", "<function=",
-        "<|MiMoML|", "<tool_calls>", "<invoke",
+        "<|MiMoML|", "<tool_calls>", "<invoke", "antml:invoke",
     ]
     text_lower = text.lower()
     return any(m.lower() in text_lower for m in markers)
@@ -354,7 +359,101 @@ def _extract_mimoml_tool_call(
     return tool_calls if tool_calls else None
 
 
-# ─── 策略1: TOOL_CALL: name(...) ────────────────────────────
+# ─── 策略0.5: <antml:invoke>（MiMo v2.6 上游内置工具）───────
+
+_ANTML_INVOKE_RE = re.compile(
+    r"<(?:antml:)?invoke[^>]*\bname\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:antml:)?invoke>",
+    re.DOTALL | re.IGNORECASE,
+)
+_ANTML_PARAM_RE = re.compile(
+    r"<(?:antml:)?parameter[^>]*\bname\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:antml:)?parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+_ANTML_CDATA_OPEN = "<" + "![CDATA["
+_ANTML_CDATA_CLOSE = "]]" + ">"
+
+
+def _strip_cdata(value):
+    """去掉 CDATA 标记；字符串与嵌套结构里的字符串都要处理。
+
+    实测参数值形如 `[<![CDATA[北京今天天气]]>]` —— 标记嵌在 JSON 数组元素里，
+    只在边界剥一次会漏；这里做全局剥离，因此同时兼容纯包裹 `<![CDATA[x]]>`。
+    """
+    if isinstance(value, str):
+        return (value.replace(_ANTML_CDATA_OPEN, "")
+                     .replace(_ANTML_CDATA_CLOSE, "")
+                     .strip())
+    if isinstance(value, list):
+        return [_strip_cdata(x) for x in value]
+    if isinstance(value, dict):
+        return {k: _strip_cdata(v) for k, v in value.items()}
+    return value
+
+
+def _parse_antml_list(value: str) -> Any:
+    """尽力把 `[a, b]` 这类值转成 list。
+
+    实测上游会把参数值写成 `["<![CDATA[北京今天天气]]>"]`（合法 JSON，CDATA 在元素里），
+    也见过剥标记后变成 `[北京今天天气]`（元素无引号，非法 JSON）。后者退化成按逗号切分。
+    """
+    if not (value.startswith("[") and value.endswith("]")):
+        return None
+    inner = value[1:-1].strip()
+    if not inner:
+        return []
+    return [_auto_type(part.strip().strip('"').strip("'")) for part in inner.split(",")]
+
+
+def _parse_antml_args(body: str) -> Dict[str, Any]:
+    args: Dict[str, Any] = {}
+    for pm in _ANTML_PARAM_RE.finditer(body):
+        key = pm.group(1).strip()
+        val = _strip_cdata(pm.group(2).strip())
+        try:
+            args[key] = _strip_cdata(json.loads(val))
+            continue
+        except (json.JSONDecodeError, ValueError):
+            pass
+        fallback = _parse_antml_list(val)
+        args[key] = fallback if fallback is not None else _auto_type(val)
+    return args
+
+
+def _extract_antml_tool_call(
+    text: str, tool_names: List[str]
+) -> Optional[List[Dict[str, Any]]]:
+    """匹配 v2.6 模型输出的 `<antml:invoke>` 工具调用。
+
+    实测形状（上游内置 search / scrape 用这个格式）：
+        <antml:invoke name="search">
+        <antml:parameter name="queries">["北京今天天气"]</antml:parameter>
+        </antml:invoke>
+
+    工具名不在客户端 tools 里时返回 None（由上层清理标签，不当成正文输出）。
+    """
+    if not tool_names:
+        return None
+
+    tool_calls = []
+    for m in _ANTML_INVOKE_RE.finditer(text):
+        if _is_inside_think(text, m.start()):
+            continue
+        name = m.group(1).strip()
+        resolved = _resolve_tool_name(name, tool_names)
+        if not resolved:
+            continue
+        args = _parse_antml_args(m.group(2))
+        tc = normalize_tool_call({"name": resolved, "arguments": args})
+        if tc:
+            tool_calls.append(tc)
+
+    return tool_calls or None
+
+
+# ─── 策略1: TOOL_CALL: name(...) ────────────────────────
+
 
 def _extract_tool_call_pattern(
     text: str, tool_names: List[str]
@@ -691,9 +790,9 @@ def clean_tool_text(text: str) -> str:
     text = re.sub(r"</?\|MiMoML\|[^>]*>", "", text)
     text = re.sub(r"<tool_calls?>.*?</tool_calls?>", "", text, flags=re.DOTALL | re.IGNORECASE)
     # 同时匹配 <invoke> 和 <|MiMoML|invoke> 两种形式
-    text = re.sub(r"<(?:[|]MiMoML[|])?invoke[^>]*>.*?</(?:[|]MiMoML[|])?invoke>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # 同时匹配 <parameter> 和 <|MiMoML|parameter> 两种形式
-    text = re.sub(r"<(?:[|]MiMoML[|])?parameter[^>]*>.*?</(?:[|]MiMoML[|])?parameter>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<(?:[|]MiMoML[|]|antml:)?invoke[^>]*>.*?</(?:[|]MiMoML[|]|antml:)?invoke>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 同时匹配 <parameter>、<|MiMoML|parameter>、<antml:parameter> 三种形式
+    text = re.sub(r"<(?:[|]MiMoML[|]|antml:)?parameter[^>]*>.*?</(?:[|]MiMoML[|]|antml:)?parameter>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<!\[CDATA\[.*?\]\]>", "", text, flags=re.DOTALL)
     # <tool_call>...</tool_call>
     text = re.sub(

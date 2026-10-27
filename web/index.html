@@ -198,6 +198,7 @@
         <div class="header">
             <h1>MiMo2API</h1>
             <p data-i18n="mimoDesc">小米 MiMo 模型 OpenAI 兼容 API</p>
+            <p id="appVersion" style="margin-top:4px;font-size:12px;color:var(--text-muted);letter-spacing:.5px">v?</p>
             <div style="position:absolute;top:40px;right:20px">
                 <button onclick="toggleLang()" id="langBtn" style="padding:6px 14px;background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">🌐 EN</button>
             </div>
@@ -625,6 +626,21 @@ document.addEventListener('DOMContentLoaded',function(){$id('langBtn').textConte
                 else toast(_('clearFail'), true);
             } catch (e) { toast(_('clearFailMsg') + e.message, true); }
         }
+
+        // === 版本号（来自 FastAPI 的 openapi.json，直接反映当前运行的 python 代码） ===
+        async function loadVersion() {
+            const el = document.getElementById('appVersion');
+            if (!el) return;
+            try {
+                const r = await fetch('/openapi.json');
+                if (!r.ok) throw new Error(r.status);
+                const j = await r.json();
+                el.textContent = 'v' + ((j.info && j.info.version) || '?');
+            } catch (e) {
+                el.textContent = 'v? (' + e.message + ')';
+            }
+        }
+        loadVersion();
 
         // === 初始化 ===
         loadConfig();
