@@ -39,7 +39,7 @@ from .batch import (
     process_batch_requests as _anthropic_process_batch_requests,
 )
 from .batch import init_batch_storage as _anthropic_init_batch_storage
-from .mimo_client import MimoClient, MimoApiError
+from .mimo_client import MimoClient, MimoApiError, stream_chat
 from .config import config_manager
 from .models import OpenAIMessage
 from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
@@ -566,7 +566,7 @@ async def anthropic_messages(
     # ═══════════════════════════════════════════════════════════
     if stream:
         async def _wrap():
-            mimo_gen = client.stream_api(query, False, model, multi_medias=multi_medias, conversation_id=conv_id)
+            mimo_gen = stream_chat(client, query, False, model, multi_medias=multi_medias, conversation_id=conv_id)
             async for event in _anthropic_stream_think_wrapper(
                 mimo_gen, model, msg_id, tool_names=tool_names,
             ):

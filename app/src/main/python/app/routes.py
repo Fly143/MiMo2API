@@ -19,7 +19,7 @@ from .models import (
     OpenAIDelta, OpenAIUsage, ParseCurlRequest, TestAccountRequest
 )
 from .config import config_manager, MimoAccount
-from .mimo_client import MimoClient, MimoApiError
+from .mimo_client import MimoClient, MimoApiError, stream_chat
 from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .context_compressor import compress_messages, truncate_messages, should_compress
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
@@ -47,6 +47,7 @@ THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
 MODELS_CONFIG_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/config"
+
 
 # ─── 模型上下文参数 ───────────────────────────────────────────
 # 官方数据：https://platform.xiaomimimo.com/static/docs/pricing.md
@@ -726,8 +727,8 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(
-                query, thinking, model, multi_medias,
+            async for sse_data in stream_chat(
+                client, query, thinking, model, multi_medias,
                 conversation_id=conv_id, reasoning_effort=reasoning_effort,
             ):
                 if sse_data.get("type") == "usage":
@@ -834,8 +835,8 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(
-                query, thinking, model, multi_medias,
+            async for sse_data in stream_chat(
+                client, query, thinking, model, multi_medias,
                 conversation_id=conv_id, reasoning_effort=reasoning_effort,
             ):
                 if sse_data.get("type") == "usage":
@@ -1309,7 +1310,7 @@ async def _probe_account(client) -> str:
 
 
 async def _validate_and_save(service_token: str, user_id: str, xiaomichatbot_ph: str):
-    from .mimo_client import MimoClient, MimoApiError
+    from .mimo_client import MimoClient, MimoApiError, stream_chat
 
     account = MimoAccount(service_token=service_token, user_id=user_id, xiaomichatbot_ph=xiaomichatbot_ph)
     client = MimoClient(account)
@@ -1359,7 +1360,7 @@ async def test_account(idx: int, username: str = Depends(verify_admin)):
     if idx < 0 or idx >= len(accounts):
         raise HTTPException(404, "account not found")
 
-    from .mimo_client import MimoClient, MimoApiError
+    from .mimo_client import MimoClient, MimoApiError, stream_chat
     acc = accounts[idx]
     client = MimoClient(acc)
 
@@ -2151,7 +2152,7 @@ async def _stream_response_events(body: dict, account):
             in_think = False
             buffer = ""
 
-            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
+            async for sse_data in stream_chat(client, query, thinking, effective_model, multi_medias):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
                     continue
@@ -2375,7 +2376,7 @@ async def _stream_response_events(body: dict, account):
             in_think = False
             buffer = ""
 
-            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
+            async for sse_data in stream_chat(client, query, thinking, effective_model, multi_medias):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
                     continue
