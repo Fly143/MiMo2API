@@ -50,20 +50,28 @@ def format_tool_results(tool_results: list) -> str:
         name = item.get("name", "unknown")
         res = item.get("result", {})
         lines.append(f"[工具执行: {name}]")
-        if isinstance(res, dict) and "error" in res:
-            lines.append(f"  ❌ {res['error']}")
-        elif isinstance(res, dict) and "result" in res:
-            inner = res["result"]
-            if isinstance(inner, dict):
+        if isinstance(res, dict):
+            if "error" in res:
+                lines.append(f"  ❌ {res['error']}")
+            elif name == "list_files" and "files" in res and "dirs" in res:
                 # 目录列表结果
-                if "files" in inner and "dirs" in inner:
-                    lines.append(f"  目录: {inner.get('path', '')}")
-                    lines.append(f"  文件({len(inner['files'])}): {', '.join(inner['files'][:20])}{'...' if len(inner['files']) > 20 else ''}")
-                    lines.append(f"  文件夹({len(inner['dirs'])}): {', '.join(inner['dirs'][:20])}{'...' if len(inner['dirs']) > 20 else ''}")
-                else:
+                lines.append(f"  目录: {res.get('path', '')}")
+                lines.append(f"  文件({len(res['files'])}): {', '.join(res['files'][:20])}{'...' if len(res['files']) > 20 else ''}")
+                lines.append(f"  文件夹({len(res['dirs'])}): {', '.join(res['dirs'][:20])}{'...' if len(res['dirs']) > 20 else ''}")
+            elif name == "shell" and "stdout" in res:
+                # shell 命令执行结果
+                lines.append(f"  stdout:\n{res.get('stdout', '')[:500]}")
+                if res.get("stderr"):
+                    lines.append(f"  stderr:\n{res.get('stderr', '')[:200]}")
+                lines.append(f"  exit_code: {res.get('exit_code', 'N/A')}")
+            elif "result" in res:
+                inner = res["result"]
+                if isinstance(inner, dict):
                     lines.append(f"  {json.dumps(inner, ensure_ascii=False)[:200]}")
+                else:
+                    lines.append(f"  {str(inner)[:200]}")
             else:
-                lines.append(f"  {str(inner)[:200]}")
+                lines.append(f"  {str(res)[:200]}")
         else:
             lines.append(f"  {str(res)[:200]}")
         lines.append("")

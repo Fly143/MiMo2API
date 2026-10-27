@@ -127,14 +127,25 @@ def _shell_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             command,
             shell=True,
             capture_output=True,
-            text=True,
             timeout=timeout,
         )
+
+        def _dec(b: bytes) -> str:
+            # UTF-8（Linux/Android）优先，回退 GBK（中文 Windows cmd 报错），最后替换兜底
+            if not b:
+                return ""
+            for enc in ("utf-8", "gbk"):
+                try:
+                    return b.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            return b.decode("utf-8", errors="replace")
+
         return {
             "command": command,
             "exit_code": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
+            "stdout": _dec(proc.stdout),
+            "stderr": _dec(proc.stderr),
         }
     except subprocess.TimeoutExpired as exc:
         return {"error": f"命令超时: {exc}", "command": command}
