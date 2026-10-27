@@ -118,6 +118,13 @@ Remember: The ONLY valid way to use tools is the <|MiMoML|tool_calls>...</|MiMoM
         if name:
             prompt += f"  - {name}: {desc}\n" if desc else f"  - {name}\n"
 
+    prompt += """
+IMPORTANT: The tools listed above are REAL and available to you (executed server-side),
+in addition to your built-in search/scrape. When the user asks to use one of these tools,
+you MUST call it using the format above. Never claim a tool is unavailable if it appears
+under 可用工具 — saying "I don't have this tool" is a wrong answer.
+"""
+
     return prompt
 
 

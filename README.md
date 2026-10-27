@@ -87,7 +87,7 @@ app/build/outputs/apk/release/app-release.apk
 同步流程：主分支更新后，将 `main.py`、`app/`、`web/` 等 Python 代码同步到
 `app/src/main/python/` 并重新构建 APK。
 
-当前同步至 main `v2.6.7.1`（APK versionName 2.6.7.1 / versionCode 15）。
+当前同步至 main `v2.6.8`（APK versionName 2.6.8 / versionCode 17）。
 
 > 唯一的分支专有改动：`app/config.py` 的 `cryptography` 不可用时退化为明文存储
 > （Chaquopy 无 Fernet 原生依赖）。同步 `config.py` 时必须保留 `HAS_FERNET` 兜底，
