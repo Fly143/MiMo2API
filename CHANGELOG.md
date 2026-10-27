@@ -2,6 +2,21 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.7.1] — 2026-10-27
+
+### 修复
+- **检索事件名更正** — v3 的联网事件名是 `web_search`（不是 `search`），原 `citations` 分支实为死代码；
+  现兼容两种名字，并从 `responses[].responseData`（JSON 字符串）解析出检索结果列表
+
+### 变更
+- `webSearchStatus` 在 v3 上游已失效：`disabled` / `auto` / `enabled` 三档实测均触发联网检索
+  （promptTokens 16.6K / 17.8K / 30.6K），字段仍照旧发送但不产生效果
+
+### 说明
+- 上游 `web_search` 事件内含它自己执行的 `search` / `scrape` 工具调用（`toolCalls` + `responses`），
+  与客户端的 OpenAI `tools` 是两套机制；v2.6 模型不会改用客户端的文本工具协议
+- 正文仍带原始 `[citation:N]` 标记（citation 格式化自 v2.5.6 起已移除）
+
 ## [v2.6.7] — 2026-10-27
 
 ### 修复
