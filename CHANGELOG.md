@@ -2,6 +2,14 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.9] — 2026-10-28
+
+### 修复
+- **TTS 短别名调用 502** — 模型发现列表暴露的 `mimo-v2.5-tts-vd` / `-vc` 必失败：
+  一是 `_tts_generate` 分支只认长后缀致短名误入普通分支（带 voice 参数被上游拒），二是上游 `tts/v2/generate` 不认短名 modelCode（400）。
+  现模型列表过滤短别名只露规范名（与 `_latest_series` 同层），请求侧经 `TTS_MODEL_ALIASES` 归一化到
+  `-voicedesign` / `-voiceclone`，旧调用不破坏。四个语音模型（tts / voicedesign / voiceclone / asr）已端到端验证
+
 ## [v2.6.8] — 2026-10-28
 
 ### 变更
