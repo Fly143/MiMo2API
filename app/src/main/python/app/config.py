@@ -25,7 +25,9 @@ except ImportError:  # pragma: no cover - Chaquopy / 无原生依赖环境
 
 DEFAULT_API_KEYS = "sk-mimo"
 DEFAULT_ADMIN_PASSWORD = "admin"
-DEFAULT_TOOLS_PASSTHROUGH = True
+# 默认非透传：两档都是轻量注入（tools JSON + 最小 MiMoML 规则），非透传额外附可用工具清单，
+# 实测工具调用遵守率 5/5（透传 3/5）——工具场景以非透传为默认档
+DEFAULT_TOOLS_PASSTHROUGH = False
 DEFAULT_COMPRESSION_MODE = "compress"
 
 ENC_PREFIX = "enc:v1:"

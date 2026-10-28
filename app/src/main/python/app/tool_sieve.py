@@ -44,9 +44,11 @@ class StreamSieve:
         self,
         mode: str = "tool_call",
         parse_fn: Optional[Callable[[str], Tuple]] = None,
+        max_capture_chars: int = 8000,
     ):
         self.mode = mode
         self.parse_fn = parse_fn  # (text, tool_names) -> (tool_calls, cleaned_text)
+        self.max_capture_chars = max_capture_chars  # 捕获上限：防模型复述格式/格式漂移时整段不闭合把流卡死
         self._pending = ""         # 正常模式下的缓冲（最多保留尾部可疑字符）
         self._capture_buf = ""     # 捕获模式下的缓冲
         self._capturing = False    # 是否在捕获模式
@@ -58,6 +60,14 @@ class StreamSieve:
 
         if self._capturing:
             self._capture_buf += chunk
+            # 捕获上限：超限仍未闭合 → 降级为正文释放，不让整个流哑掉
+            if len(self._capture_buf) > self.max_capture_chars and not self._is_capture_complete():
+                if self._capture_buf:
+                    events.append(SieveEvent("text", self._capture_buf))
+                self._capture_buf = ""
+                self._capturing = False
+                self._tool_start_idx = -1
+                return events
             result = self._try_finish_capture()
             if result is not None:
                 prefix_text, tool_calls, suffix = result
