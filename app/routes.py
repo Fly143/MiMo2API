@@ -293,6 +293,9 @@ async def get_model(
 
 # ─── 文本清洗辅助函数 ────────────────────────────────────────
 
+TOOL_MARKER_SNIPPETS = ("antml:invoke", "MiMoML|tool_calls", "TOOL_CALL:", "<function_call", "调用工具")
+
+
 def _strip_tool_result_blocks(text: str) -> str:
     """移除模型幻觉输出的 TOOL_RESULT 标签。
 
@@ -657,6 +660,7 @@ async def chat_completions(
         # 提取工具调用
         tool_names = []
         tool_calls = None
+        _raw_for_marker = content
         if tools_dict:
             tool_names = get_tool_names(tools_dict)
             result = extract_tool_call(content, tool_names)
@@ -671,6 +675,12 @@ async def chat_completions(
         if not tool_calls:
             content = clean_tool_text(content)
         content = _strip_tool_name_prefix(content, tool_names)
+
+        # 格式失败反馈（非流式）：出现过工具标记但没解析出调用 → 明确告知格式，打断瞎猜循环
+        if tools_dict and not tool_calls and _raw_for_marker and any(
+            mk in _raw_for_marker for mk in TOOL_MARKER_SNIPPETS
+        ):
+            content = (content or "").rstrip() + "\n\n[提示] 工具调用格式无法解析、未执行。请只用 <|MiMoML|tool_calls><|MiMoML|invoke name=\"...\"><|MiMoML|parameter name=\"...\"><![CDATA[...]]></|MiMoML|parameter></|MiMoML|invoke></|MiMoML|tool_calls> 格式重新输出一次工具调用；不要用 antml（会被上游拦截），不要尝试其他格式。"
 
         # 服务端执行工具调用（非内置两个工具：search / scrape）
         # 内置两个工具由上游原生执行；其他工具由本服务端执行并返回结果。
@@ -786,7 +796,8 @@ async def _stream_response(
                 parse_fn=lambda text: extract_tool_call(text, tool_names),
             )
             collected_tool_calls = []
-            content_buffer_chunks = []  # 缓冲正文：命中工具调用时丢弃，否则收尾补发
+            saw_marker = False  # 是否见过工具标记（格式失败反馈用）
+            content_buffer_chunks = []  # 工具调用命中后的正文缓冲（命中前正文实时流出）
             in_think = False
             buffer = ""
             last_usage = None
@@ -803,6 +814,9 @@ async def _stream_response(
                 if not chunk:
                     continue
 
+                if not saw_marker and any(mk in chunk for mk in TOOL_MARKER_SNIPPETS):
+                    saw_marker = True
+
                 buffer += chunk.replace("\x00", "")
 
                 # 处理 think 标签
@@ -812,12 +826,15 @@ async def _stream_response(
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
-                                # Feed through sieve — stream text, collect tool calls
+                                # Feed through sieve — 工具命中前正文实时流出，命中后缓冲
                                 for ev in sieve.feed(safe):
                                     if ev.type == 'text':
                                         clean = _clean_response_text(ev.data, tool_names)
                                         if clean:
-                                            content_buffer_chunks.append(clean)
+                                            if collected_tool_calls:
+                                                content_buffer_chunks.append(clean)
+                                            else:
+                                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                     elif ev.type == 'tool_calls':
                                         collected_tool_calls.extend(ev.data)
                             in_think = True
@@ -830,7 +847,10 @@ async def _stream_response(
                                 if ev.type == 'text':
                                     clean = _clean_response_text(ev.data, tool_names)
                                     if clean:
-                                        content_buffer_chunks.append(clean)
+                                        if collected_tool_calls:
+                                            content_buffer_chunks.append(clean)
+                                        else:
+                                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                 elif ev.type == 'tool_calls':
                                     collected_tool_calls.extend(ev.data)
                         buffer = keep
@@ -857,7 +877,10 @@ async def _stream_response(
                     if ev.type == 'text':
                         clean = _clean_response_text(ev.data, tool_names)
                         if clean:
-                            content_buffer_chunks.append(clean)
+                            if collected_tool_calls:
+                                content_buffer_chunks.append(clean)
+                            else:
+                                yield _build_chunk(msg_id, model, created=created_t, content=clean)
                     elif ev.type == 'tool_calls':
                         collected_tool_calls.extend(ev.data)
 
@@ -866,9 +889,17 @@ async def _stream_response(
                 if ev.type == 'text':
                     clean = _clean_response_text(ev.data, tool_names)
                     if clean:
-                        content_buffer_chunks.append(clean)
+                        if collected_tool_calls:
+                            content_buffer_chunks.append(clean)
+                        else:
+                            yield _build_chunk(msg_id, model, created=created_t, content=clean)
                 elif ev.type == 'tool_calls':
                     collected_tool_calls.extend(ev.data)
+
+            # 格式失败反馈（流式）：见过工具标记但没解析出调用 → 明确告知格式，打断瞎猜循环
+            if not collected_tool_calls and saw_marker:
+                yield _build_chunk(msg_id, model, created=created_t,
+                                   content="\n\n[提示] 工具调用格式无法解析、未执行。请只用 <|MiMoML|tool_calls><|MiMoML|invoke name=\"...\"><|MiMoML|parameter name=\"...\"><![CDATA[...]]></|MiMoML|parameter></|MiMoML|invoke></|MiMoML|tool_calls> 格式重新输出一次工具调用；不要用 antml（会被上游拦截），不要尝试其他格式。")
 
             if collected_tool_calls:
                 # 有工具调用 → 不发 content，只发 tool_calls

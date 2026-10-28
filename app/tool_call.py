@@ -48,13 +48,10 @@ def build_tool_prompt(tools: List[Dict[str, Any]], passthrough: bool = False) ->
     mimo_client._query_body 不消费 tools 字段，模型只在正文里输出
     `<|MiMoML|tool_calls>...</|>` 文本，路由层用 extract_tool_call 解析。
 
-    passthrough=True：仍走文本协议，但跳过冗长的 MiMoML 格式说明书，
-      直接嵌入原始工具 JSON + 简短英文指令，让模型按客户端的偏好
-      （TOOL_CALL: / <|MiMoML|> / 自有格式）自由输出。适合 Roo Code / Cline
-      等自带工具语义的客户端，减少格式冲突。
-
-    passthrough=False：在 prompt 中嵌入完整的 MiMoML 格式说明书，
-      强制模型用 `<|MiMoML|tool_calls>...</|>` 输出。
+    两档都嵌入 tools JSON + 最小 MiMoML 规则（轻量注入）。
+    不能用 antml：上游会把 <antml:invoke> 当内置工具在生成内拦截，未知工具直接报错循环。
+    不能塞完整 MiMoML 说明书：太长会诱发 v2.6 复述格式 / 判定提示注入而拒答。
+    passthrough=True 只嵌 JSON + 规则；False 额外附可用工具清单。
 
     注：与 workbuddy-desktop-api / xiaomi-mimo-desktop-api 的 passthrough=True
     含义不同——后者上游已原生支持 OpenAI tool_calls，passthrough=True 直接
@@ -63,52 +60,39 @@ def build_tool_prompt(tools: List[Dict[str, Any]], passthrough: bool = False) ->
     if not tools:
         return ""
 
-    if passthrough:
-        # 透传：不塞 MiMoML 说明书（避免模型复述格式）。
-        # aistudio 上游无原生 OpenAI tool_calls，仅嵌入工具 JSON 供文本协议使用。
-        tools_json = json.dumps(tools, indent=2, ensure_ascii=False)
-        return f"<tools>\n{tools_json}\n</tools>"
 
 
-    prompt = """TOOL CALL FORMAT — FOLLOW EXACTLY:
+    # 轻量注入：tools JSON + 最小 MiMoML 规则。
+    # 两个坑位（都实测过）：
+    #  1) 完整 MiMoML 说明书太长 → v2.6 模型会复述格式 / 判定为提示注入而拒答；
+    #  2) 不能让模型用 antml —— 上游把 <antml:invoke> 当自己的内置工具在生成内拦截执行，
+    #     未知工具（如 shell）会当场报错并循环重试，我们的抽取器根本看不到调用。
+    # MiMoML 上游不拦截，会原样落到正文里被服务端提取执行。
+    _tools_json = json.dumps(tools, indent=2, ensure_ascii=False)
+    base = f"""<tools>
+{_tools_json}
+</tools>
+
+TOOL CALL FORMAT — when a tool call is needed, output ONLY this form (do not wrap in markdown fences, do not restate this instruction, do not try other formats):
 
 <|MiMoML|tool_calls>
-  <|MiMoML|invoke name="TOOL_NAME_HERE">
-    <|MiMoML|parameter name="PARAMETER_NAME"><![CDATA[PARAMETER_VALUE]]></|MiMoML|parameter>
+  <|MiMoML|invoke name="TOOL_NAME">
+    <|MiMoML|parameter name="ARG_NAME"><![CDATA[ARG_VALUE]]></|MiMoML|parameter>
   </|MiMoML|invoke>
 </|MiMoML|tool_calls>
 
-RULES:
-1) Use the <|MiMoML|tool_calls> wrapper format.
-2) Put one or more <|MiMoML|invoke> entries under a single <|MiMoML|tool_calls> root.
-3) Put the tool name in the invoke name attribute: <|MiMoML|invoke name="TOOL_NAME">.
-4) All string values must use <![CDATA[...]]>, even short ones.
-5) Every top-level argument must be a <|MiMoML|parameter name="ARG_NAME">...</|MiMoML|parameter> node.
-6) Objects use nested XML elements. Arrays may repeat <item> children.
-7) Numbers, booleans, and null stay plain text.
-8) Use only the parameter names in the tool schema. Do not invent fields.
-9) Do NOT wrap XML in markdown fences. Do NOT output explanations or role markers.
-10) If you call a tool, the first non-whitespace characters must be exactly <|MiMoML|tool_calls>.
-11) Never omit the opening <|MiMoML|tool_calls> tag.
+Rules: use only parameter names defined in the tool schema; all string values go inside <![CDATA[...]]; numbers/booleans stay as plain CDATA text.
 
-【WRONG — Do NOT do these】:
-
-Wrong 1 — mixed text after XML:
-  <|MiMoML|tool_calls>...</|MiMoML|tool_calls> I hope this helps.
-
-Wrong 2 — Markdown code fences:
-  ```xml
-  <|MiMoML|tool_calls>...</|MiMoML|tool_calls>
-  ```
-
-Wrong 3 — missing opening wrapper:
-  <|MiMoML|invoke name="TOOL_NAME">...</|MiMoML|invoke>
-  </|MiMoML|tool_calls>
-
-Remember: The ONLY valid way to use tools is the <|MiMoML|tool_calls>...</|MiMoML|tool_calls> block.
+CRITICAL: <antml:invoke> CANNOT execute the tools above — that channel is reserved for the platform's built-in search/scrape and always fails with "工具调用失败" for any other tool. The ONLY working format is the <|MiMoML|tool_calls> block shown above. When the user asks to use one of these tools you MUST output the MiMoML block; saying the tool is unavailable or that calls failed is a wrong answer.
 
 """
 
+    if passthrough:
+        # 透传也必须带最小 MiMoML 规则：裸 JSON 会让模型选它原生的 antml，
+        # 而 antml 会被上游当内置工具拦截执行（未知工具当场报错循环重试）。
+        return base
+
+    prompt = base
     prompt += "可用工具:\n"
     for tool in tools:
         func = _safe_get(tool, "function", default={})
@@ -117,13 +101,6 @@ Remember: The ONLY valid way to use tools is the <|MiMoML|tool_calls>...</|MiMoM
         desc = desc.split("\n")[0].strip()
         if name:
             prompt += f"  - {name}: {desc}\n" if desc else f"  - {name}\n"
-
-    prompt += """
-IMPORTANT: The tools listed above are REAL and available to you (executed server-side),
-in addition to your built-in search/scrape. When the user asks to use one of these tools,
-you MUST call it using the format above. Never claim a tool is unavailable if it appears
-under 可用工具 — saying "I don't have this tool" is a wrong answer.
-"""
 
     return prompt
 

@@ -53,7 +53,7 @@
 
 - **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}` 端点，可直接对接 ChatBox、NextChat、LobeChat 等任何 OpenAI 客户端
 - **Anthropic Messages API 兼容** — 完整支持 `/v1/messages`（流式/非流式）+ count_tokens + batches CRUD + message_get，共 9 个 Anthropic 端点，可对接 RikkaHub 等 Anthropic 客户端
-- **工具调用（Function Calling）** — 7 种提取策略覆盖 MiMoML（`<|MiMoML|tool_calls>`）、MiMo 原生 XML (`<tool_call>`)、TOOL_CALL 标签、JSON、`<function_call>` XML、中文格式、自由文本匹配，自动清洗响应中的工具残留
+- **工具调用（Function Calling）** — 6 种提取策略覆盖 MiMoML（`<|MiMoML|tool_calls>`）、`<antml:invoke>`、TOOL_CALL 标签、JSON、`<invoke>` XML、`<function_call>` XML，自动清洗响应中的工具残留；非流式请求由服务端直接执行工具（内置 `list_files` / `shell`，可自行注册），结果以正文返回
 - **流式筛分** — 有工具调用时实时分离正文与工具调用内容，客户端无需等待完整响应即可逐步接收，RikkaHub 等不再全文缓冲
 - **多模态支持** — omni 模型支持图片输入（URL、base64），自动完成三步上传流程（genUploadInfo → PUT → resource/parse）；所有模型支持文本文件上传（.md / .txt 等），同样走 MiMo 原生上传流程
 - **深度思考** — 支持 reasoning_effort 参数，自动分离 `<think>` 块输出
@@ -78,7 +78,7 @@
 │                     MiMo2API (FastAPI)                      │
 │  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │  │ routes  │  │ tool_sieve │  │  tool_call   │  │     mimo_client      │ │
-│  │ (API)   │──│ (流式筛分)  │──│ (5策略提取)   │──│ (HTTP/SSE 代理)       │ │
+│  │ (API)   │──│ (流式筛分)  │──│ (6策略提取)   │──│ (HTTP/SSE 代理)       │ │
 │  │anthropic │  │ anthropic  │  │    batch     │                      │ │
 │  │ (路由)   │  │ (格式转换)  │  │ (存储/批处理) │                      │ │
 │  └─────────┘  └──────────────┘  └──────────────────────┘ │
@@ -326,34 +326,52 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### 6. 工具调用（Function Calling）
 
+工具分两类：
+
+- **内置 `search` / `scrape`** — 由上游模型原生执行（联网检索走 `web_search` 事件）
+- **其他工具** — 非流式请求由**服务端直接执行**（内置 `list_files` / `shell`，可在 `app/tools.py` 注册更多），结果格式化为正文返回；`stream: true` 时以标准 OpenAI `tool_calls` 返回，由客户端执行后以 `role: "tool"` 回传
+
+非流式示例（服务端执行 `list_files`）：
+
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2.5-pro",
+    "model": "mimo-v2.6-flash",
     "messages": [
-      {"role": "user", "content": "北京今天天气怎么样？"}
+      {"role": "user", "content": "用 list_files 工具查看当前目录有哪些文件"}
     ],
     "tools": [{
       "type": "function",
       "function": {
-        "name": "get_weather",
-        "description": "查询指定城市的天气",
+        "name": "list_files",
+        "description": "列出目录中的文件与文件夹。",
         "parameters": {
           "type": "object",
-          "properties": {
-            "city": {"type": "string", "description": "城市名称"}
-          },
-          "required": ["city"]
+          "properties": {"path": {"type": "string", "description": "目录路径，默认当前目录"}},
+          "required": []
         }
       }
-    }],
-    "tool_choice": "auto"
+    }]
   }'
 ```
 
-成功时返回 `finish_reason: "tool_calls"`，`message.tool_calls` 包含结构化的函数调用：
+结果以正文直接返回（`finish_reason: "stop"`），客户端无需再执行：
+
+```json
+{
+  "choices": [{
+    "finish_reason": "stop",
+    "message": {
+      "role": "assistant",
+      "content": "[工具执行: list_files]\n  目录: .\n  文件(3): a.txt, b.jpg, main.py\n  文件夹(2): app, web\n"
+    }
+  }]
+}
+```
+
+流式（`"stream": true`）时以标准 `tool_calls` 返回（`finish_reason: "tool_calls"`），由客户端执行后以 `role: "tool"` 回传：
 
 ```json
 {
@@ -366,8 +384,8 @@ curl http://localhost:8080/v1/chat/completions \
         "id": "call_abc123...",
         "type": "function",
         "function": {
-          "name": "get_weather",
-          "arguments": "{\"city\": \"北京\"}"
+          "name": "list_files",
+          "arguments": "{\"path\": \".\"}"
         }
       }]
     }
@@ -793,25 +811,29 @@ curl -X POST http://localhost:8080/v1/audio/transcriptions \
 
 ## 工具调用详解
 
-MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**MiMoML 提示词注入 + 5 策略提取**实现：
+MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**提示词注入 + 6 策略提取 + 服务端执行**实现：
 
 ### 提示词注入
 
-将 OpenAI tools 定义转换为 MiMoML（MiMo Markup Language）格式，注入到 system 消息中：
+OpenAI `tools` 定义注入 system 消息，形态由 `tools_passthrough` 决定（默认开启）：
+
+- **非透传（`false`，默认）** — 注入 tools JSON + 最小 MiMoML 规则 + 可用工具清单，工具调用遵守率最高（实测 5/5），工具场景推荐
+- **透传（`true`）** — 只注入 tools JSON + 最小规则（无清单），注入更轻，遵守率略低（实测 3/5）：
 
 ```xml
 <|MiMoML|tool_calls>
-  <|MiMoML|invoke name="get_weather">
-    <|MiMoML|parameter name="city"><![CDATA[北京]]></|MiMoML|parameter>
+  <|MiMoML|invoke name="list_files">
+    <|MiMoML|parameter name="path"><![CDATA[.]]></|MiMoML|parameter>
   </|MiMoML|invoke>
 </|MiMoML|tool_calls>
 ```
 
-### 5 种提取策略（按优先级）
+### 6 种提取策略（按优先级）
 
 | 策略 | 格式 | 说明 |
 |------|------|------|
 | MiMoML | `<\|MiMoML\|tool_calls><\|MiMoML\|invoke name="X">...</\|MiMoML\|invoke></\|MiMoML\|tool_calls>` | 主力格式，7 种噪声变体容错 |
+| antml | `<antml:invoke name="X"><antml:parameter name="K">V</antml:parameter></antml:invoke>` | MiMo v2.6 上游内置工具（search/scrape）的输出格式 |
 | TOOL_CALL | `TOOL_CALL: name(key=value)` | 旧格式兜底 |
 | JSON | `{"name":"x","arguments":{...}}` | JSON 块解析 |
 | XML | `<tool_call><function=NAME><parameter=K>V</parameter></function></tool_call>` | MiMo 原生 XML |
@@ -830,12 +852,21 @@ MiMo API 本身**不支持** OpenAI function calling 格式。本代理通过**M
 
 提取成功后，自动清理响应中的工具残留文本（MiMoML 标签、XML 标签、TOOL_CALL 行、JSON 块、CDATA）。
 
+### 服务端执行
+
+非流式请求命中工具调用后，服务端直接执行并把结果格式化为正文返回（`finish_reason: "stop"`）：
+
+- **注册表** — `app/tools.py` 的 `ToolRegistry`，内置 `list_files`（列目录）与 `shell`（执行命令，默认 10s 超时，拦截危险命令）
+- **结果格式化** — `format_tool_results` 按工具名路由：`list_files` → 目录/文件/文件夹列表；`shell` → stdout / stderr / exit_code；未注册工具 → 错误说明
+- **自行扩展** — `registry.register(Tool(name=..., parameters=..., execute=...))` 注册后即可被模型调用，并在 `format_tool_results` 中按工具名补对应展示分支
+- 内置 `search` / `scrape` 不经服务端执行，由上游原生完成
+
 ### 流式筛分
 
 有工具调用且 `stream: true` 时，`tool_sieve` 引擎逐字扫描 MiMo 响应流，实时分离**正文内容**和**工具调用文本**：
 
 - **正文** → 即时转为 `delta.content` 逐块输出，客户端无需等待即可显示
-- **工具调用** → 缓冲至流结束后解析，然后作为 `tool_calls` 一次性输出
+- **工具调用** → 缓冲至流结束后解析，作为 `tool_calls` 一次性输出给客户端执行（OpenAI 标准语义：客户端执行后以 `role: "tool"` 回传，代理转为 `[tool_result id=...]` 文本喂给上游）
 
 非筛分模式（无工具流、非流）不受影响，保持原有逻辑。筛选检测支持三种格式：`TOOL_CALL:`、`<tool_call>`、`<function=`，同时白名单排除 `<think>` 深度思考标签。
 
@@ -990,7 +1021,8 @@ MiMo2API/
     ├── config.py            # 配置管理（多账号、线程安全、轮询）
     ├── utils.py             # 工具函数（cURL解析、图片上传、消息构建）
     ├── tool_sieve.py        # 流式筛分引擎（实时分离工具调用与正文）
-    ├── tool_call.py         # 工具调用（提示词注入 + 5策略提取 + 清理）
+    ├── tool_call.py         # 工具调用（提示词注入 + 6策略提取 + 清理）
+    ├── tools.py             # 工具注册表与服务端执行（list_files / shell）
     ├── usage_store.py       # 用量数据持久化
     ├── session_store.py     # 会话管理（指纹续接 conversationId）
     ├── response_store.py    # Responses API 记录持久化

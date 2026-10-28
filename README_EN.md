@@ -50,7 +50,7 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
 
 - **OpenAI Fully Compatible** — Standard `/v1/chat/completions` (streaming/non-streaming), `/v1/models`, `/v1/models/{id}` endpoints, works with any OpenAI client (ChatBox, NextChat, LobeChat, etc.)
 - **Anthropic Messages API** — Full support for `/v1/messages` (streaming/non-streaming) + count_tokens + batches CRUD + message_get, 9 Anthropic endpoints total, compatible with RikkaHub and other Anthropic clients
-- **Function Calling** — 7 extraction strategies covering MiMoML (`<|MiMoML|tool_calls>`), MiMo native XML (`<tool_call>`), TOOL_CALL tags, JSON, `<function_call>` XML, Chinese format, free-text matching, with automatic response cleanup
+- **Function Calling** — 6 extraction strategies covering MiMoML (`<|MiMoML|tool_calls>`), `<antml:invoke>`, TOOL_CALL tags, JSON, `<invoke>` XML, and `<function_call>` XML, with automatic response cleanup; non-streaming requests execute tools server-side (built-in `list_files` / `shell`, extensible) and return results as message content
 - **Streaming Sieve** — Real-time separation of content and tool call data during streaming, clients receive output progressively without buffering the full response
 - **Multimodal** — omni models support image input (URL, base64), auto-completing the 3-step upload flow (genUploadInfo → PUT → resource/parse); all models support text file upload (.md / .txt etc.) via MiMo's native upload pipeline
 - **Deep Thinking** — Reasoning effort parameter support, automatic `<think>` tag separation in output
@@ -75,7 +75,7 @@ Convert **Xiaomi MiMo AI Studio** web chat into an **OpenAI-compatible API**, wi
 │                     MiMo2API (FastAPI)                      │
 │  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │  │ routes  │  │ tool_sieve │  │  tool_call   │  │     mimo_client      │ │
-│  │ (API)   │──│ (streaming  │──│ (5-strategy   │──│ (HTTP/SSE proxy)      │ │
+│  │ (API)   │──│ (streaming  │──│ (6-strategy   │──│ (HTTP/SSE proxy)      │ │
 │  │anthropic │  │ sieve)     │  │  extraction) │                      │ │
 │  │ (routes) │  │ anthropic  │  │    batch     │                      │ │
 │  └─────────┘  │ (fmt conv.) │  │ (storage)    │                      │ │
@@ -288,34 +288,52 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### 6. Function Calling
 
+Tools fall into two categories:
+
+- **Built-in `search` / `scrape`** — executed natively by the upstream model (web search surfaces as `web_search` events)
+- **Other tools** — non-streaming requests are executed **server-side** (built-in `list_files` / `shell`, extensible in `app/tools.py`) and results are returned as message content; with `stream: true`, standard OpenAI `tool_calls` are returned for the client to execute and feed back via `role: "tool"`
+
+Non-streaming example (server-side `list_files` execution):
+
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mimo-v2.5-pro",
+    "model": "mimo-v2.6-flash",
     "messages": [
-      {"role": "user", "content": "What is the weather in Beijing today?"}
+      {"role": "user", "content": "Use the list_files tool to show what files are in the current directory"}
     ],
     "tools": [{
       "type": "function",
       "function": {
-        "name": "get_weather",
-        "description": "Query weather for a specified city",
+        "name": "list_files",
+        "description": "List files and folders in a directory.",
         "parameters": {
           "type": "object",
-          "properties": {
-            "city": {"type": "string", "description": "City name"}
-          },
-          "required": ["city"]
+          "properties": {"path": {"type": "string", "description": "Directory path, defaults to current directory"}},
+          "required": []
         }
       }
-    }],
-    "tool_choice": "auto"
+    }]
   }'
 ```
 
-On success, returns `finish_reason: "tool_calls"`, with `message.tool_calls` containing structured function calls:
+Results are returned directly as message content (`finish_reason: "stop"`) — no client-side execution needed (output labels are Chinese, as produced by the server):
+
+```json
+{
+  "choices": [{
+    "finish_reason": "stop",
+    "message": {
+      "role": "assistant",
+      "content": "[工具执行: list_files]\n  目录: .\n  文件(3): a.txt, b.jpg, main.py\n  文件夹(2): app, web\n"
+    }
+  }]
+}
+```
+
+With `stream: true`, standard `tool_calls` are returned (`finish_reason: "tool_calls"`) for the client to execute and feed back via `role: "tool"`:
 
 ```json
 {
@@ -328,8 +346,8 @@ On success, returns `finish_reason: "tool_calls"`, with `message.tool_calls` con
         "id": "call_abc123...",
         "type": "function",
         "function": {
-          "name": "get_weather",
-          "arguments": "{\"city\": \"北京\"}"
+          "name": "list_files",
+          "arguments": "{\"path\": \".\"}"
         }
       }]
     }
@@ -521,25 +539,29 @@ Returns Anthropic-format `tool_use` blocks:
 
 ## Tool Calling Details
 
-MiMo API itself **does not** support OpenAI function calling format. This proxy implements it via **MiMoML prompt injection + 5-strategy extraction**:
+MiMo API itself **does not** support OpenAI function calling format. This proxy implements it via **prompt injection + 6-strategy extraction + server-side execution**:
 
 ### Prompt Injection
 
-OpenAI tools definitions are converted to MiMoML (MiMo Markup Language) format and injected into the system message:
+OpenAI `tools` definitions are injected into the system message; the shape is controlled by `tools_passthrough` (enabled by default):
+
+- **Non-passthrough (`false`, default)** — injects tools JSON + minimal MiMoML rule + available tool list; highest tool-call compliance (5/5 in tests), recommended for tool use
+- **Passthrough (`true`)** — injects only tools JSON + minimal rule (no list); lighter injection, slightly lower compliance (3/5):
 
 ```xml
 <|MiMoML|tool_calls>
-  <|MiMoML|invoke name="get_weather">
-    <|MiMoML|parameter name="city"><![CDATA[Beijing]]></|MiMoML|parameter>
+  <|MiMoML|invoke name="list_files">
+    <|MiMoML|parameter name="path"><![CDATA[.]]></|MiMoML|parameter>
   </|MiMoML|invoke>
 </|MiMoML|tool_calls>
 ```
 
-### 5 Extraction Strategies (by priority)
+### 6 Extraction Strategies (by priority)
 
 | Strategy | Format | Description |
 |----------|--------|-------------|
 | MiMoML | `<\|MiMoML\|tool_calls><\|MiMoML\|invoke name="X">...</\|MiMoML\|invoke></\|MiMoML\|tool_calls>` | Primary format, 7 noise variant tolerances |
+| antml | `<antml:invoke name="X"><antml:parameter name="K">V</antml:parameter></antml:invoke>` | Output format of MiMo v2.6 upstream built-in tools (search/scrape) |
 | TOOL_CALL | `TOOL_CALL: name(key=value)` | Legacy format fallback |
 | JSON | `{"name":"x","arguments":{...}}` | JSON block parsing |
 | XML | `<tool_call><function=NAME><parameter=K>V</parameter></function></tool_call>` | MiMo native XML |
@@ -558,12 +580,21 @@ OpenAI tools definitions are converted to MiMoML (MiMo Markup Language) format a
 
 After extraction, automatically cleans residual tool text from the response (MiMoML tags, XML tags, TOOL_CALL lines, JSON blocks, CDATA).
 
+### Server-Side Execution
+
+For non-streaming requests that yield tool calls, the server executes them directly and returns the formatted results as message content (`finish_reason: "stop"`):
+
+- **Registry** — `ToolRegistry` in `app/tools.py`, with built-in `list_files` (directory listing) and `shell` (command execution, 10s default timeout, dangerous-command blocking)
+- **Result formatting** — `format_tool_results` routes by tool name: `list_files` → directory/file/folder listing; `shell` → stdout / stderr / exit_code; unregistered tools → error description
+- **Extending** — register via `registry.register(Tool(name=..., parameters=..., execute=...))`, then add a matching display branch in `format_tool_results`
+- Built-in `search` / `scrape` bypass server-side execution — they run natively upstream
+
 ### Streaming Sieve
 
 When tool calling is active and `stream: true`, the `tool_sieve` engine scans the MiMo response stream character by character, separating **content** from **tool call text** in real time:
 
 - **Content** → immediately emitted as `delta.content` chunks, client displays progressively
-- **Tool calls** → buffered until stream ends, then parsed and output as `tool_calls` in one shot
+- **Tool calls** → buffered until stream ends, parsed, and output as `tool_calls` for the client to execute (OpenAI standard semantics: the client executes and feeds results back via `role: "tool"`, which the proxy converts to `[tool_result id=...]` text for the upstream)
 
 Non-sieve mode (no-tools streaming, non-streaming) is unaffected, maintaining the original logic. Detection supports three formats: `TOOL_CALL:`, `<tool_call>`, `<function=`, while whitelisting `<think>` deep thinking tags.
 
@@ -894,7 +925,8 @@ MiMo2API/
     ├── config.py            # Config management (multi-account, thread-safe, round-robin)
     ├── utils.py             # Utility functions (cURL parsing, image upload, message building)
     ├── tool_sieve.py        # Streaming sieve engine (real-time tool call / content separation)
-    ├── tool_call.py         # Tool calling (prompt injection + 5-strategy extraction + cleanup)
+    ├── tool_call.py         # Tool calling (prompt injection + 6-strategy extraction + cleanup)
+    ├── tools.py             # Tool registry & server-side execution (list_files / shell)
     ├── usage_store.py       # Usage data persistence
     ├── session_store.py     # Session management (fingerprint-based conversationId continuation)
     ├── response_store.py    # Responses API record persistence

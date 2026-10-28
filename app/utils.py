@@ -106,8 +106,7 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
 
         if msg.role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', text, flags=re.IGNORECASE)
-            text = f"[tool_result id={tool_call_id[:8]}] {clean}"
+            text = _format_tool_result(text, tool_call_id, getattr(msg, 'name', '') or '')
 
         processed_messages.append({"role": msg.role, "text": text})
 
@@ -116,27 +115,48 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
 
 
 def _serialize_tool_calls(tool_calls: list) -> str:
-    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
+    """工具调用序列化 — 输出模型原生的 antml invoke 方言（兼容 dict 和 pydantic model）。
+
+    历史里保留模型自己发的调用形态（v2.6 说 antml），
+    旧的 `TOOL_CALL: name(k=v)` 文本模型对不上号。
+    """
     tc_lines = []
     for tc in tool_calls:
         fn = _safe_nested_get(tc, "function")
         if not fn:
             continue
-        fname = _safe_nested_get(fn, "name", "")
-        args_str = _safe_nested_get(fn, "arguments", "{}")
+        fname = _safe_nested_get(fn, "name", default="") or ""
+        args_str = _safe_nested_get(fn, "arguments", default="{}")
 
         try:
             args = _json.loads(args_str) if isinstance(args_str, str) else args_str
-            if isinstance(args, dict):
-                kv = ", ".join(f"{k}={v!r}" for k, v in args.items())
-            else:
-                kv = str(args)
         except Exception:
-            kv = str(args_str)
+            args = None
 
-        tc_lines.append(f"TOOL_CALL: {fname}({kv})")
+        params = ""
+        if isinstance(args, dict):
+            for k, v in args.items():
+                if v is not None and not isinstance(v, (str, int, float, bool)):
+                    v = _json.dumps(v, ensure_ascii=False)
+                v = str(v).replace("]]>", "]]&gt;")
+                params += f'  <antml:parameter name="{k}"><![CDATA[{v}]]></antml:parameter>\n'
+
+        tc_lines.append(f'<antml:invoke name="{fname}">\n{params}</antml:invoke>')
 
     return "\n".join(tc_lines)
+
+
+def _format_tool_result(content: str, tool_call_id: str = "", name: str = "") -> str:
+    """工具结果统一格式 — antml 方言的 <function_results> 块。
+
+    旧格式 `[tool_result id=xxx]` 模型不认识（实测思考链报"结果没传过来"后循环重调）；
+    function_results 与 v2.6 的 antml 调用方言同源。
+    """
+    clean = re.sub(r"\[TOOL_RESULT\]\s*", "", content or "", flags=re.IGNORECASE).strip()
+    clean = clean.replace("]]>", "]]&gt;")
+    id_attr = f' id="{tool_call_id}"' if tool_call_id else ""
+    name_attr = f' name="{name}"' if name else ""
+    return f"<function_results>\n<result{id_attr}{name_attr}><![CDATA[{clean}]]></result>\n</function_results>"
 
 
 def _safe_nested_get(obj, *keys, default=None):
@@ -420,15 +440,22 @@ def build_query_from_messages(
 
         non_system_msgs.append(msg)
 
-    # continuation 模式：只取最后一条 user 消息
+    # continuation 模式：默认只取最后一条 user 消息
+    # （MiMo 服务端通过 conversationId 已有上下文）
+    # 尾部带工具回传时只发 tool 结果：模型自己记得刚发的调用，
+    # 重发 user 问题会被当成"用户重复提问"→ 拿不到结果就循环重调工具（RikkaHub 实测）
     if continuation and non_system_msgs:
-        last_user = None
-        for msg in reversed(non_system_msgs):
-            if msg.role == "user":
-                last_user = msg
-                break
-        if last_user:
-            non_system_msgs = [last_user]
+        tool_tail = [m for m in non_system_msgs if getattr(m, 'role', '') == 'tool']
+        if tool_tail:
+            non_system_msgs = tool_tail
+        else:
+            last_user = None
+            for msg in reversed(non_system_msgs):
+                if msg.role == "user":
+                    last_user = msg
+                    break
+            if last_user:
+                non_system_msgs = [last_user]
 
     for msg in non_system_msgs:
         role = msg.role
@@ -446,9 +473,7 @@ def build_query_from_messages(
 
         if role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
-            clean = re.sub(r'\[TOOL_RESULT\]\s*', '', content, flags=re.IGNORECASE)
-            clean = clean.strip()
-            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
+            content = _format_tool_result(content, tool_call_id, getattr(msg, 'name', '') or '')
 
         query_parts.append(f"{role}: {content}")
 
@@ -553,8 +578,7 @@ def build_chunked_queries(
             content = _serialize_tool_calls(msg.tool_calls)
         if msg.role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
-            clean = __import__('re').sub(r'\[TOOL_RESULT\]\s*', '', content, flags=__import__('re').IGNORECASE).strip()
-            content = f"[tool_result id={tool_call_id[:8]}] {clean}"
+            content = _format_tool_result(content, tool_call_id, getattr(msg, 'name', '') or '')
         msg_strs.append(f"{msg.role}: {content}")
 
     # 按消息边界拆分 — system prompt 只在第一个 chunk 注入
