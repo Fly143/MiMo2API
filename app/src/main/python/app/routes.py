@@ -201,6 +201,8 @@ async def _do_discover() -> list:
         return []
 
     models = _latest_series(raw)
+    # 列表过滤短别名（只露规范名）；请求侧兼容由 TTS_MODEL_ALIASES 归一化负责
+    models = [n for n in models if n not in TTS_MODEL_ALIASES]
     meta = {n: {"owned_by": _model_kind(n), "kind": _model_kind(n)} for n in models}
     async with _models_lock:
         _models_cache = models
@@ -989,6 +991,12 @@ VOICE_MAP = {
     "onyx": "苏打", "nova": "Mia", "shimmer": "Chloe",
 }
 
+# 模型发现列表里的短别名：上游 tts/v2/generate 只认规范名，此处归一化
+TTS_MODEL_ALIASES = {
+    "mimo-v2.5-tts-vd": "mimo-v2.5-tts-voicedesign",
+    "mimo-v2.5-tts-vc": "mimo-v2.5-tts-voiceclone",
+}
+
 
 def _generate_style(speed: float, style_hint: str = "") -> str:
     """从 OpenAI speed 参数生成 MiMo 风格描述。"""
@@ -1017,6 +1025,7 @@ async def _tts_generate(
     style_hint: str, speed: float, acct,
 ) -> bytes:
     """执行 TTS 全流程：创建对话 -> 提交任务 -> 轮询 -> 下载音频。"""
+    model = TTS_MODEL_ALIASES.get(model, model)
     if model.endswith("-voicedesign"):
         user_content = style_hint or "生成一个自然流畅的声音"
         audio_config = {"format": "wav"}
