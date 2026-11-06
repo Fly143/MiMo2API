@@ -2,6 +2,21 @@
 
 本文件记录 MiMo2API 的所有重要变更。
 
+## [v2.6.11] — 2026-11-06
+
+### 新增
+- **ultra 模型接入（fastchat 网关）** — `mimo-v2.6-pro-ultraspeed-studio` 只在新网关可用：
+  模型名含 `ultraspeed` 自动路由到 `/fastchat/open-apis/bot/chat`（react/chat 对该模型回「模型名称错误」），
+  请求体按老 bot/chat 形态补 `isEditedQuery`；其余模型仍走 react/chat，原有链路不变
+- **fastchat 消息解析** — 上游 `message.content` 按 `\x00` 分段（`<think>\x00思考</think>\x00正文`），
+  新增 `FastchatSplitter` 解析并分段输出思考/正文；标记与分隔符跨 chunk 时持有尾部，流式不裂
+- **模型发现补入 ultra** — ultra 只出现在旧表 `modelConfigList`，`ext.enableUltraspeed` 开启时按 `ultraspeed`
+  标记补入；模型名取自上游响应，上游改版自动跟随
+
+### 说明
+- fastchat 忽略 `enableThinking`（总是思考）：思考段照常下发（流式 `reasoning_content`、非流式 `<think>` 标签）
+- 上游限额时正文即「服务器繁忙，请稍后再试」
+
 ## [v2.6.10] — 2026-10-28
 
 ### 修复
