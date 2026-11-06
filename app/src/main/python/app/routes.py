@@ -201,6 +201,13 @@ async def _do_discover() -> list:
         return []
 
     models = _latest_series(raw)
+    # ultra 系（fastchat 网关独占）只在旧表 modelConfigList，由 ext.enableUltraspeed 开关控制
+    _d = data.get("data") or {}
+    if (_d.get("ext") or {}).get("enableUltraspeed"):
+        for m in _d.get("modelConfigList") or []:
+            name = (m or {}).get("model") or ""
+            if "ultraspeed" in name and name not in models:
+                models.append(name)
     # 列表过滤短别名（只露规范名）；请求侧兼容由 TTS_MODEL_ALIASES 归一化负责
     models = [n for n in models if n not in TTS_MODEL_ALIASES]
     meta = {n: {"owned_by": _model_kind(n), "kind": _model_kind(n)} for n in models}

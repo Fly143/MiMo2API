@@ -63,6 +63,78 @@ class MimoApiError(Exception):
         super().__init__(f"MiMo API error {status_code}: {response_body[:200]}")
 
 
+def _use_fastchat(model: str) -> bool:
+    """ultra 系模型只在 fastchat 网关可用（react/chat 对其回「模型名称错误」）。"""
+    return "ultraspeed" in (model or "").lower()
+
+
+class FastchatSplitter:
+    """fastchat bot/chat 的 message.content 拆分器。
+
+    实测协议（3 次采样一致）：``<think>\x00思考文本</think>\x00正文``。
+    - NUL 前是 <think>（无斜杠）→ 其后进入思考段
+    - NUL 前是 </think>（带斜杠）→ 其后进入正文段
+    上游忽略 enableThinking，思考段总是下发；是否对外暴露由调用方按 thinking 旗标过滤。
+    标记与 NUL 可能跨 chunk：尾部按分隔符前缀持有，输出时剥净残留标记。
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self):
+        self.mode = "text"
+        self._buf = ""
+
+    def feed(self, chunk: str) -> list:
+        """喂入增量内容，返回 [(mode, text), ...]，mode ∈ {"reasoning","text"}。"""
+        self._buf += chunk or ""
+        out = []
+        while True:
+            i = self._buf.find("\x00")
+            if i < 0:
+                break
+            head, self._buf = self._buf[:i], self._buf[i + 1:]
+            prev_mode = self.mode
+            if head.endswith(self._CLOSE):
+                self.mode = "text"
+                head = head[: -len(self._CLOSE)]
+            elif head.endswith(self._OPEN):
+                self.mode = "reasoning"
+                head = head[: -len(self._OPEN)]
+            head = self._clean(head)
+            if head:
+                out.append((prev_mode, head))
+        # 无 NUL：持有尾部可能的分隔符前缀（标记或 NUL 跨 chunk）
+        hold = 0
+        for tag in (self._OPEN, self._CLOSE):
+            for k in range(len(tag), 0, -1):
+                if self._buf.endswith(tag[:k]):
+                    hold = max(hold, k)
+                    break
+        if hold:
+            text, self._buf = self._buf[:-hold], self._buf[-hold:]
+        else:
+            text, self._buf = self._buf, ""
+        text = self._clean(text)
+        if text:
+            out.append((self.mode, text))
+        return out
+
+    def flush(self) -> list:
+        """流结束：吐出持有缓冲（剥标记后）。"""
+        out = []
+        if self._buf:
+            text = self._clean(self._buf)
+            self._buf = ""
+            if text:
+                out.append((self.mode, text))
+        return out
+
+    @classmethod
+    def _clean(cls, text: str) -> str:
+        return text.replace(cls._OPEN, "").replace(cls._CLOSE, "").replace("\x00", "")
+
+
 class MimoClient:
     """Mimo API客户端"""
 
@@ -70,6 +142,9 @@ class MimoClient:
     # {"type":"text","content":"平台升级啦，请「刷新页面」畅享更好的体验！"}，不再产生任何回答。
     API_URL = "https://aistudio.xiaomimimo.com/open-apis/react/chat"
     LEGACY_API_URL = "https://aistudio.xiaomimimo.com/open-apis/bot/chat"
+    # fastchat 网关（2026-11 起）：ultra 系模型独占，react/chat 对其回 event:error「模型名称错误」。
+    # 请求体是老 bot/chat 形态（query + modelConfig + isEditedQuery），SSE 事件名与 react 相同。
+    FASTCHAT_API_URL = "https://aistudio.xiaomimimo.com/fastchat/open-apis/bot/chat"
     # 主对话 HTTP 超时（秒）。默认 0 = 不限：思考+输出整条流纯透传，不设代理侧时限。
     # 需要保护时显式设 MIMO_CLIENT_TIMEOUT=600 等。
     _t = float(os.getenv("MIMO_CLIENT_TIMEOUT", "0") or "0")
@@ -102,8 +177,9 @@ class MimoClient:
             "xiaomichatbot_ph": self.account.xiaomichatbot_ph,
         }
 
-    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None, reasoning_effort: str = None) -> dict:
-        """创建请求体。temperature/topP/reasoning_effort 仅在显式传入时带上；仅 thinking 且无档位时默认 high。"""
+    def _create_request_body(self, query: str, thinking: bool, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, temperature: float = None, top_p: float = None, reasoning_effort: str = None, fastchat: bool = False) -> dict:
+        """创建请求体。temperature/topP/reasoning_effort 仅在显式传入时带上；仅 thinking 且无档位时默认 high。
+        fastchat=True 时按老 bot/chat 形态补 isEditedQuery 字段。"""
         model_config = {
             "enableThinking": thinking,
             "webSearchStatus": "disabled",
@@ -117,7 +193,7 @@ class MimoClient:
             model_config["reasoning_effort"] = reasoning_effort
         elif thinking:
             model_config["reasoning_effort"] = "high"
-        return {
+        body = {
             "msgId": uuid.uuid4().hex[:32],
             "conversationId": conversation_id or uuid.uuid4().hex[:32],
             "query": query,
@@ -125,6 +201,9 @@ class MimoClient:
             "multiMedias": multi_medias or [],
             "attachments": attachments or []
         }
+        if fastchat:
+            body["isEditedQuery"] = False
+        return body
 
     async def call_api(self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro", multi_medias: list = None, attachments: list = None, conversation_id: str = None, reasoning_effort: str = None) -> Tuple[str, str, dict]:
         """调用Mimo API（非流式），带重试"""
@@ -158,11 +237,12 @@ class MimoClient:
         Returns:
             (content, think_content, usage)
         """
-        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort)
+        fastchat = _use_fastchat(model)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort, fastchat=fastchat)
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             response = await client.post(
-                self.API_URL,
+                self.FASTCHAT_API_URL if fastchat else self.API_URL,
                 params={"xiaomichatbot_ph": self.account.xiaomichatbot_ph},
                 headers=self._create_headers(),
                 cookies=self._create_cookies(),
@@ -176,13 +256,18 @@ class MimoClient:
             think_parts = []
             citations = []
             usage = {"promptTokens": 0, "completionTokens": 0}
+            splitter = FastchatSplitter() if fastchat else None
 
             async for event, payload in self._iter_events(response):
                 if event == "error":
                     raise MimoApiError(502, json.dumps(payload, ensure_ascii=False))
                 if event == "message" and isinstance(payload, dict):
-                    think_parts.append(payload.get("reasoningContent") or "")
-                    content_parts.append(payload.get("content") or "")
+                    if fastchat:
+                        for mode, text in self._fastchat_message(payload, splitter):
+                            (think_parts if mode == "reasoning" else content_parts).append(text)
+                    else:
+                        think_parts.append(payload.get("reasoningContent") or "")
+                        content_parts.append(payload.get("content") or "")
                 elif event in ("search", "web_search"):
                     citations = self._search_results(payload) or citations
                 elif isinstance(payload, dict) and "promptTokens" in payload:
@@ -193,6 +278,10 @@ class MimoClient:
                         "nativeUsage": payload.get("nativeUsage", {}),
                     }
 
+            if fastchat:
+                for mode, text in self._fastchat_flush(splitter):
+                    (think_parts if mode == "reasoning" else content_parts).append(text)
+
             # v3 把思考与正文分成两个字段；老式 <think> 标签仅作兜底
             full_content = "".join(content_parts).replace("\x00", "")
             think_content = "".join(think_parts).replace("\x00", "")
@@ -200,6 +289,24 @@ class MimoClient:
                 full_content, think_content = self._parse_think_tags(full_content)
 
             return full_content, think_content, usage, citations
+
+    @staticmethod
+    def _fastchat_message(payload: dict, splitter: "FastchatSplitter"):
+        """fastchat message → (mode, text) 序列。上游忽略 enableThinking 总会思考，思考段照常下发。"""
+        ptype = payload.get("type")
+        if ptype in ("thinking", "reasoning") or payload.get("reasoningContent"):
+            yield "reasoning", payload.get("reasoningContent") or payload.get("content") or ""
+            return
+        for mode, text in splitter.feed(payload.get("content") or ""):
+            if text:
+                yield mode, text
+
+    @staticmethod
+    def _fastchat_flush(splitter: "FastchatSplitter"):
+        """fastchat 流结束：吐出拆分器持有的尾部缓冲。"""
+        for mode, text in splitter.flush():
+            if text:
+                yield mode, text
 
     @staticmethod
     def _search_results(payload) -> list:
@@ -262,12 +369,13 @@ class MimoClient:
             {"type":"usage", ...}              用量
             {"type":"citations","data":[...]}  搜索结果（webSearch 开启时）
         """
-        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort)
+        fastchat = _use_fastchat(model)
+        body = self._create_request_body(query, thinking, model, multi_medias, attachments, conversation_id, reasoning_effort=reasoning_effort, fastchat=fastchat)
 
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             async with client.stream(
                 "POST",
-                self.API_URL,
+                self.FASTCHAT_API_URL if fastchat else self.API_URL,
                 params={"xiaomichatbot_ph": self.account.xiaomichatbot_ph},
                 headers=self._create_headers(),
                 cookies=self._create_cookies(),
@@ -277,16 +385,22 @@ class MimoClient:
                     error_body = await response.aread()
                     raise MimoApiError(response.status_code, error_body.decode(errors="replace"))
 
+                splitter = FastchatSplitter() if fastchat else None
+
                 async for event, payload in self._iter_events(response):
                     if event == "error":
                         raise MimoApiError(502, json.dumps(payload, ensure_ascii=False))
                     if event == "message" and isinstance(payload, dict):
-                        reasoning = payload.get("reasoningContent")
-                        if reasoning:
-                            yield {"type": "reasoning", "content": reasoning}
-                        text = payload.get("content")
-                        if text:
-                            yield {"type": "text", "content": text}
+                        if fastchat:
+                            for mode, text in self._fastchat_message(payload, splitter):
+                                yield {"type": mode, "content": text}
+                        else:
+                            reasoning = payload.get("reasoningContent")
+                            if reasoning:
+                                yield {"type": "reasoning", "content": reasoning}
+                            text = payload.get("content")
+                            if text:
+                                yield {"type": "text", "content": text}
                     elif event in ("search", "web_search"):
                         results = self._search_results(payload)
                         if results:
@@ -296,6 +410,10 @@ class MimoClient:
                                "completionTokens": payload.get("completionTokens", 0),
                                "totalTokens": payload.get("totalTokens", 0),
                                "nativeUsage": payload.get("nativeUsage", {})}
+
+                if fastchat:
+                    for mode, text in self._fastchat_flush(splitter):
+                        yield {"type": mode, "content": text}
 
     @staticmethod
     def _parse_think_tags(text: str) -> Tuple[str, str]:
